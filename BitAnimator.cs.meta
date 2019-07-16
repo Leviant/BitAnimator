@@ -1,0 +1,17 @@
+fileFormatVersion: 2
+guid: aa47876f8d2847347a73397eb4f406a8
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - animatorObject: {instanceID: 0}
+  - targetObject: {instanceID: 0}
+  - audioClip: {instanceID: 0}
+  - shader: {instanceID: 0}
+  - computeShader: {fileID: 7200000, guid: 870cc0e29b44ad047a5554f243c10f04, type: 3}
+  - computeShaderResult: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

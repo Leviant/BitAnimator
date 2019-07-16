@@ -1,0 +1,17 @@
+fileFormatVersion: 2
+guid: f258f7b42abacae4998b995d4b67f258
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - m_PersistentViewDataDictionary: {instanceID: 0}
+  - target: {instanceID: 0}
+  - serializedPresets: {fileID: 4900000, guid: 129bd575907de26429ac5e3c10dec4bf, type: 3}
+  - audio: {instanceID: 0}
+  - material: {instanceID: 0}
+  - texture: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

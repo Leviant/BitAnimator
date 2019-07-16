@@ -1,0 +1,1675 @@
+﻿
+// Copyright © 2019 Leviant. 
+// E-mail: leviant@yandex.ru  
+// Discord: Leviant#8796
+// PayPal: https://paypal.me/LeviantTech
+// License: http://opensource.org/licenses/MIT
+// Version: 1.0 (14.07.2019)
+
+#pragma enable_d3d11_debug_symbols
+#pragma kernel CopyBuffer
+#pragma kernel MergeChannels2
+#pragma kernel MergeChannelsN
+#pragma kernel SaveTexture
+#pragma kernel Transpose
+#pragma kernel Derivative
+#pragma kernel PowerKernel
+#pragma kernel ReductionSum
+#pragma kernel FinalSum
+#pragma kernel ReductionMax
+#pragma kernel FinalMax
+#pragma kernel MultiplyKernel
+#pragma kernel MultiplyBuffers
+#pragma kernel DivideKernel
+#pragma kernel PartialSumBig
+#pragma kernel PartialSumSmall
+#pragma kernel PrefixSum
+#pragma kernel PrefixSumLocal
+#pragma kernel DampingKernel
+#pragma kernel CreateWindow
+#pragma kernel FFT_Init					
+#pragma kernel FFT_Part					
+#pragma kernel FFT_Execute
+#pragma kernel DolphChebyshevWindow	
+#pragma kernel IFFT_Execute
+#pragma kernel IFFT_Part				
+#pragma kernel DFT_Execute
+#pragma kernel AbsSpectrum				
+#pragma kernel CalculateFons
+#pragma kernel SpectrumLinearToLog
+#pragma kernel AmplitudeSmooth
+#pragma kernel FrequencySmooth
+#pragma kernel DFT_BPM
+#pragma kernel GetPeaks
+#pragma kernel RenderBars
+#pragma kernel DrawHistogram
+#pragma kernel RenderSpectrumKernel
+#pragma kernel BeatFinder
+#pragma kernel VisualizeBPM
+#pragma kernel Precompute_Loudness_LUT
+#pragma kernel CreateFonLUT
+#pragma kernel DrawHistogramVolume
+#pragma kernel Resample
+#pragma kernel FillKeyframes
+#pragma kernel DecimateKeyframesKernel
+#pragma kernel CurveFilter
+#pragma kernel RemapKernel
+#pragma kernel KeyframesCreator
+#pragma kernel RemapGradientKernel
+#pragma kernel ConvertToQuaternions
+#pragma kernel ComputeResolve
+#pragma kernel ResolveMultisamplesKernel
+
+#define UNITY_PI 3.14159265358979323844f
+#define M_E 2.71828182845904523536f
+
+#define TILE_DIM 32
+#define BLOCK_ROWS 8
+#define MAX_WORKSIZE 1024
+
+struct SwapComplex
+{
+	float2 complex[2];
+};
+struct Keyframe
+{
+	float time;
+	float value;
+	float inTangent;
+	float outTangent;
+	int tangentMode;
+};
+Buffer<float> Window;
+Buffer<float> Input;
+Buffer<float> Input2;
+RWBuffer<float> Output;
+RWBuffer<float2> complexOutput;
+RWStructuredBuffer<SwapComplex> buffer;
+StructuredBuffer<Keyframe> Keyframes;
+RWStructuredBuffer<Keyframe> OutputKeyframes;
+Texture2D<float> VolumeLUT;
+SamplerState samplerLutClampLinear;
+
+groupshared float2 values[MAX_WORKSIZE][2];
+groupshared float bpms[256];
+
+uniform uint3 GridSize;
+uniform uint3 GridOffset;
+uniform float4 MinimumValues;
+uniform float4 MaximumValues;
+uniform uint Source;
+uniform uint N;
+uniform uint FFTWindow;
+uniform uint Channels;
+uniform uint Frequency;
+uniform uint Multisamples;
+uniform uint SampleStep;
+uniform uint BufferStep;
+uniform float Scale;
+uniform float Time;
+
+inline float2 conjunction(float2 c)
+{
+	return float2(c.x, -c.y);
+}
+inline float2 complexMultiply(float2 left, float2 right)
+{
+	return float2(dot(left, conjunction(right)), dot(left, right.yx));
+}
+inline float2 complexDivide(float2 c1, float2 c2)
+{
+	float l = dot(c2, c2);
+	float real = dot(c1.xy, c2) / l;
+	float imag = dot(c1.yx, c2) / l;
+	return float2(real, imag);
+}
+inline float complexAbs(float2 c)
+{
+	return length(c);
+}
+inline float2 complexPolar(float2 c)
+{
+	return float2(complexAbs(c), atan2(c.y, c.x));
+}
+inline float2 complexRect(float2 c)
+{
+	return abs(c.x)* float2(cos(c.y), sin(c.y));
+}
+inline float2 complex_power(float2 base, float2 e)
+{
+	float2 b = complexPolar(base);
+	float z = pow(b.x, e.x) * exp(-e.y * b.y);
+	float fi = e.y * log(b.x) + e.x * b.y;
+	float2 rpol = float2(z, fi);
+	return complexRect(rpol);
+}
+
+[numthreads(64, 1, 1)]
+void CopyBuffer(uint3 id : SV_DispatchThreadID)
+{
+	Output[id.x] = Input[id.x + GridOffset.x];
+}
+
+[numthreads(64, 1, 1)]
+void MergeChannels2(uint3 id : SV_DispatchThreadID)
+{
+	Output[id.x] = (Input[id.x * 2] + Input[id.x * 2 + 1]) / 2.0f;
+}
+
+[numthreads(64, 1, 1)]
+void MergeChannelsN(uint3 id : SV_DispatchThreadID)
+{
+	uint j = id.x * Channels;
+	float sum = 0;
+	for (uint c = 0; c < Channels; c++)
+		sum += Input[j + c];
+	Output[id.x] = sum / Channels;
+}
+
+[numthreads(64, 1, 1)]
+void Derivative(uint3 id : SV_DispatchThreadID)
+{
+	Output[id.x] = Input[id.x + GridOffset.x] - Input[id.x + GridOffset.x - 1];
+}
+
+[numthreads(64, 1, 1)]
+void PowerKernel(uint3 id : SV_DispatchThreadID)
+{
+	Output[id.x] = pow(abs(Input[id.x + GridOffset.x]), Scale);
+}
+
+RWTexture2D<float4> RenderTexture;
+
+[numthreads(8, 8, 1)]
+void SaveTexture(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 localID : SV_GroupThreadID)
+{
+	float v = Input[id.y * FFTWindow / 2 + id.x] * 3.0;
+	RenderTexture[id.xy] = saturate(float4(v, v - 1.0, v - 2.0, 1.0f));
+}
+
+float gaussianSmooth(Buffer<float> input, int x, int radius, int start, int end)
+{
+	float result = 0;
+	float sharpness = radius / 2.0;
+	float len_correction = 2.0 * sharpness * sharpness;
+	float correction = sqrt(UNITY_PI * len_correction);
+	//float len_correction = sharpness/2.0/_Fading;
+	//float correction = UNITY_PI*len_correction/tex_step;
+	for (int xi = -radius; xi < radius; xi++)
+	{
+		float len = xi * xi;
+		result += input[clamp(x + xi, start, end - 1)] * exp(-len / len_correction);
+	}
+	return result / correction;
+}
+
+[numthreads(256, 1, 1)]
+void VisualizeBPM(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	const uint BPM_Count = 256;
+	float n = (float)BPM_Count / GridSize.x;
+	uint bar = floor(id.x * n);
+	uint samples = ceil(n);
+	float volume = 0;
+	for (uint i = 0; i < samples; i++)
+		volume += Input[bar + i];
+	volume = volume / samples;
+	//float phase = Input[id.x * 2 / n + 1];
+	float2 pos = id.xy;
+	pos /= GridSize.xy;
+	/*if (N & LogAmplitude)
+	{
+		volume = (log10(volume) + 4.0) / 4.0;
+	}*/
+	float4 color = float4(0, 0, 0, 1);
+	if (volume > pos.y)
+		color.r = 0.5;
+	/*if (phase < 0 && pos.y < 0.5)
+		color.b = 0.5 * volume;
+	else if (phase > 0 && pos.y > 0.5)
+		color.b = 0.5 * volume;*/
+	//else
+	//	color.rgb = float4(0, 0, 0, 1);
+	RenderTexture[id.xy] = color;
+}
+
+[numthreads(8, 8, 1)]
+void DrawHistogram(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 localID : SV_GroupThreadID)
+{
+	const uint LogFrequency = 1;
+	const uint LogAmplitude = 2;
+	const uint EnergyCorrection = 4;
+	const uint CalculateFons = 8;
+	uint bins = FFTWindow / 2;
+	float n = (float)bins / GridSize.x;
+	uint bar = floor(id.x * n);
+	uint samples = ceil(n);
+	float v = 0;
+	for (uint i = 0; i < samples; i++)
+		v += Input[GridOffset.y * bins + bar + i];
+	v /= samples;
+
+	float2 pos = id.xy;
+	float volume = v;
+	if (N & LogAmplitude)
+	{
+		volume = (log10(volume) + Scale) / Scale;
+	}
+	else
+		volume *= Scale;
+	float hzPerBin = (float)Frequency / FFTWindow;
+	if(N & LogFrequency)
+	{
+		//bar = exp2(bar * log2(bins) / bins) - 1;
+		float x = (float)bar / bins; // normalized Hz
+		bar = floor(bins * x * exp2(6.9 * (x - 1.0)));
+	}
+	
+	bool leftBorder = (int)bar < floor(MinimumValues.x / hzPerBin);
+	bool rightBorder = (int)bar >= ceil(MaximumValues.x / hzPerBin);
+	float3 color = 0;
+	if (volume * GridSize.y > pos.y)
+		color = float3(0.0, 0.7, 0.0);
+
+	if (leftBorder || rightBorder)
+		color = lerp(color, float3(0.5, 0.0, 0.0), 0.3);
+
+	RenderTexture[id.xy] = float4(color, 1);
+}
+/*
+float4 getTexel(Texture2D tex, sampler s,float2 p)
+{
+	p = p * myTexResolution + 0.5;
+
+	vec2 i = floor(p);
+	vec2 f = p - i;
+	f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+	p = i + f;
+
+	p = (p - 0.5) / myTexResolution;
+	return s.Sample(tex, p);
+}
+*/
+
+[numthreads(64, 1, 1)]
+void SpectrumLinearToLog(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 localID : SV_GroupThreadID)
+{
+	uint w = FFTWindow / 2;
+	//uint count = w - 1;
+
+	//float k = log2(w) / w;
+	float2 x = float2((float)id.x, id.x + 1.0) / w; // normalized Hz
+	//float start = exp2(id.x * k) - 1.0;
+	//float end = exp2((id.x + 1) * k) - 1.0;
+	float2 band = w * x * exp2(6.9 * (x - 1.0));
+	uint max_samples = ceil(band.y - band.x);
+	uint base = (GridOffset.y + id.y) * w + trunc(band.x);
+	float sum = 0;
+	for (uint i = 0; i < max_samples; i++)
+	{
+		sum += Input[base + i];
+	}
+	Output[id.y * w + id.x] = sum / max_samples;
+}
+
+[numthreads(64, 1, 1)]
+void FrequencySmooth(int3 id : SV_DispatchThreadID)
+{
+	int begin = id.y * GridSize.x;
+	int last = begin + (GridSize.x - 1);
+	int i = begin + id.x - N / 2;
+	float radius = N / 2.0;
+	float sharpness = radius / 2.0;
+	float len_correction = 2.0 * sharpness * sharpness;
+	float correction = sqrt(UNITY_PI * len_correction);
+	float result = 0;
+	for (uint j = 0; j < N; j++)
+	{
+		float x = j + 0.5 - radius;
+		float len = x * x;
+		result += Input[clamp(i + j, begin, last)] * exp(-len / len_correction);
+	}
+	Output[i] = result / correction;
+}
+
+[numthreads(64, 1, 1)]
+void AmplitudeSmooth(uint3 id : SV_DispatchThreadID)
+{
+	float radius = GridSize.y / 2.0;
+	float sharpness = Scale / 2.0;
+	float len_correction = 2.0 * sharpness * sharpness;
+	float correction = sqrt(UNITY_PI * len_correction);
+	float result = 0;
+	int size = GridSize.y;
+	for (int row = 0; row < size; row++)
+	{
+		float x = row + 0.5 - radius;
+		float len = x * x;
+		result += Input[row * GridSize.x + id.x] * exp(-len / len_correction);
+	}
+	Output[id.x] = result / correction;
+}
+
+groupshared float tile[TILE_DIM][TILE_DIM + 1];
+/*
+[numthreads(TILE_DIM, BLOCK_ROWS, 1)]
+void Transpose(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 localID : SV_GroupThreadID)
+{
+	uint x = groupID.x * TILE_DIM + localID.x;
+	uint y = groupID.y * TILE_DIM + localID.y;
+	/*
+	for (uint j = 0; j < TILE_DIM; j += BLOCK_ROWS)
+		tile[localID.y + j][localID.x] = idata[(y + j)*FFTWindow + x];
+
+	x = groupID.y * TILE_DIM + localID.x;
+	y = groupID.x * TILE_DIM + localID.y;
+
+	GroupMemoryBarrierWithGroupSync();
+
+	for (uint j = 0; j < TILE_DIM; j += BLOCK_ROWS)
+		odata[(y + j)*FFTWindow + x] = tile[localID.x][localID.y + j];
+	//
+	for (uint j = 0; j < TILE_DIM; j += BLOCK_ROWS)
+	{
+		Output[x*FFTWindow + (y + j)] = Input[(y + j)*FFTWindow + x];
+		DeviceMemoryBarrier();
+	}
+}*/
+
+[numthreads(TILE_DIM, TILE_DIM, 1)]
+void Transpose(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 localID : SV_GroupThreadID)
+{
+	Output[id.x*(FFTWindow/2) + id.y] = Input[id.y*(FFTWindow/2) + id.x];
+}
+
+groupshared float reductionSums[MAX_WORKSIZE];
+//Merge band
+//1 group (1024 threads) by N chunks {N must be power of 2}
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void ReductionSum(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)
+{
+	uint threadsPerChunk = MAX_WORKSIZE / N;
+	uint chunk = id.x / threadsPerChunk;
+	uint idx = id.x % threadsPerChunk;
+	uint position = GridOffset.x + chunk * FFTWindow / 2 + idx;
+	if (idx < GridSize.x && chunk < GridSize.y)
+		reductionSums[localID] = Input[position];
+	else
+		reductionSums[localID] = 0;
+
+	for (uint offset = threadsPerChunk / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();
+		if (idx < offset)
+			reductionSums[localID] += reductionSums[localID + offset];
+	}
+	GroupMemoryBarrierWithGroupSync();
+
+	if (idx == 0 && chunk < GridSize.y)	// the root of the reduction subtree
+		Output[chunk] = reductionSums[localID];
+}
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void FinalSum(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)
+{
+	uint iterations = (GridSize.x - 1) / MAX_WORKSIZE + 1;
+
+	reductionSums[localID] = 0;
+	uint base = GridSize.x * id.y + localID;
+	for (uint j = 0; j < iterations; j++)
+	{
+		uint idx = base + j * MAX_WORKSIZE;
+		if (idx < GridSize.x)
+			reductionSums[localID] += Input[idx];
+	}
+
+	for (uint offset = MAX_WORKSIZE / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();	// wait for all other work-items to finish previous iteration.
+		if (localID < offset)
+			reductionSums[localID] += reductionSums[localID + offset];
+
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if (localID == 0)	// the root of the reduction subtree
+		Output[id.y] = reductionSums[0];
+}
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void ReductionMax(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)
+{
+	if (id.x < GridSize.x)
+		reductionSums[localID] = Input[id.x];
+	else
+		reductionSums[localID] = 0;
+
+	for (uint offset = MAX_WORKSIZE / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();	// wait for all other work-items to finish previous iteration.
+		if (localID < offset)
+			reductionSums[localID] = max(reductionSums[localID], reductionSums[localID + offset]);
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if (localID == 0)	// the root of the reduction subtree
+		Output[groupID.x] = reductionSums[0];
+}
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void FinalMax(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)
+{
+	const uint localSize = MAX_WORKSIZE;
+	uint iterations = (GridSize.x - 1) / localSize + 1;
+
+	reductionSums[localID] = 0;
+
+	for (uint j = 0; j < iterations; j++)
+	{
+		uint idx = localID + j * localSize;
+		if (idx < GridSize.x)
+			reductionSums[localID] = max(reductionSums[localID], Input[idx]);
+	}
+
+	for (uint offset = localSize / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();	// wait for all other work-items to finish previous iteration.
+		if (localID < offset)
+			reductionSums[localID] = max(reductionSums[localID], reductionSums[localID + offset]);
+
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if (localID == 0)	// the root of the reduction subtree
+		Output[0] = reductionSums[0];
+}
+[numthreads(64, 1, 1)]
+void MultiplyKernel(uint3 globalID : SV_DispatchThreadID)
+{
+	Output[GridOffset.x + globalID.x] *= Scale;
+}
+
+[numthreads(64, 1, 1)]
+void MultiplyBuffers(uint3 id : SV_DispatchThreadID)
+{
+	Output[id.x] *= Input[id.x];
+}
+
+[numthreads(64, 1, 1)]
+void DivideKernel(uint3 globalID : SV_DispatchThreadID)
+{
+	Output[GridOffset.x + globalID.x] /= Input[0];
+}
+//Merge band
+//1 group (1024 threads) by chunk
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void PartialSumBig(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	uint iterations = (GridSize.x - GridOffset.x - 1) / MAX_WORKSIZE + 1;
+	uint globalStart = id.y * FFTWindow / 2 + GridOffset.x;
+
+	reductionSums[localID] = Input[globalStart + id.x];
+	//sum iterations if band size > 1024 
+	for (uint j = 1; j < iterations; j++)
+	{
+		uint idx = MAX_WORKSIZE * j + id.x;
+		if (idx < GridSize.x)
+			reductionSums[localID] += Input[globalStart + idx];
+	}
+	//reduction sum
+	for (uint offset = MAX_WORKSIZE / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();	// wait for all other work-items to finish previous iteration.
+		if (localID < offset)
+			reductionSums[localID] += reductionSums[localID + offset];
+
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if (localID == 0)	// the root of the reduction subtree
+		Output[id.y + GridOffset.z] = reductionSums[0];
+}
+//Merge band
+//1 thread by chunk
+[numthreads(64, 1, 1)]
+void PartialSumSmall(uint3 id : SV_DispatchThreadID, uint3 offset : SV_GroupID)
+{
+	if (id.x < GridSize.y)
+	{
+		float sum = 0;
+		uint start = GridOffset.x + id.x * FFTWindow / 2;
+		uint end = start + GridSize.x;
+		for (uint i = start; i < end; i++)
+			sum += Input[i];
+
+		Output[id.x + GridOffset.z] = sum;
+	}
+}
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void PrefixSumLocal(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	reductionSums[localID] = Input[GridOffset.x + id.x];
+	//Upward Phase
+	for (uint stride = 2; stride <= MAX_WORKSIZE; stride *= 2)
+	{
+		uint dest = localID * stride;
+		uint source = localID * (stride - 1);
+		GroupMemoryBarrierWithGroupSync();
+		if (dest & stride == dest)
+			reductionSums[dest - 1] += reductionSums[source - 1];
+	}
+	//Downward phase
+	for (stride = MAX_WORKSIZE / 2; stride > 1; stride /= 2)
+	{
+		uint dest = localID * stride;
+		uint source = localID * (stride - 1);
+		GroupMemoryBarrierWithGroupSync();
+		if (dest & stride == dest)
+			reductionSums[dest - 1] += reductionSums[source - 1];
+	}
+	GroupMemoryBarrierWithGroupSync();
+	Output[id.x] = reductionSums[localID];
+}
+//Hillis and Steele prefix sum 
+[numthreads(64, 1, 1)]
+void PrefixSum(uint3 id : SV_DispatchThreadID, uint3 offset : SV_GroupID)
+{
+	//N - offset [1, 2, 4, ...  2^n]
+	uint i = GridOffset.x + id.x;
+	Output[i + N] = Input[i] + Input[i + N];
+	if (id.x < N)
+		Output[i] = Input[i];
+}
+
+[numthreads(64, 1, 1)]
+void DampingKernel(uint3 id : SV_DispatchThreadID, uint3 offset : SV_GroupID)
+{
+	//N - offset [1, 2, 4, ...  2^n]
+	uint i = GridOffset.x + id.x;
+	float current = Input[i + N];
+	float trail = Input[i] * Scale;
+	Output[i + N] = max(trail, current);
+	if (id.x < N)
+		Output[i] = Input[i];
+}
+
+float getFons(float hz, float Lp)
+{
+	//Acoustics — Normal equal-loudness-level contours
+	//http://libnorm.ru/Files2/1/4293820/4293820821.pdf
+
+	//  Hz, Alpha_f, Lu, Tf
+	const float3 isofons[] = {
+		float3(0.532f, -31.6f, 78.5f),
+		float3(0.506f, -27.2f, 68.7f),
+		float3(0.480f, -23.0f, 59.5f),
+		float3(0.455f, -19.1f, 51.1f),
+		float3(0.432f, -15.9f, 44.0f),
+		float3(0.409f, -13.0f, 37.5f),
+		float3(0.387f, -10.3f, 31.5f),
+		float3(0.367f, -8.1f, 26.5f),
+		float3(0.349f, -6.2f, 22.1f),
+		float3(0.330f, -4.5f, 17.9f),
+		float3(0.315f, -3.1f, 14.4f),
+		float3(0.301f, -2.0f, 11.4f),
+		float3(0.288f, -1.1f, 8.6f),
+		float3(0.276f, -0.4f, 6.2f),
+		float3(0.267f, 0.0f, 4.4f),
+		float3(0.259f, 0.3f, 3.0f),
+		float3(0.253f, 0.5f, 2.2f),
+		float3(0.250f, 0.0f, 2.4f),
+		float3(0.246f, -2.7f, 3.5f),
+		float3(0.244f, -4.1f, 1.7f),
+		float3(0.243f, -1.0f, -1.3f),
+		float3(0.243f, 1.7f, -4.2f),
+		float3(0.243f, 2.5f, -6.0f),
+		float3(0.242f, 1.2f, -5.4f),
+		float3(0.242f, -2.1f, -1.5f),
+		float3(0.245f, -7.1f, 6.0f),
+		float3(0.254f, -11.2f, 12.6f),
+		float3(0.271f, -10.7f, 13.9f),
+		float3(0.301f, -3.1f, 12.3f)
+	};
+
+	const float Hz_data[] = {
+		20.0f,
+		25.0f,
+		31.5f,
+		40.0f,
+		50.0f,
+		63.0f,
+		80.0f,
+		100.0f,
+		125.0f,
+		160.0f,
+		200.0f,
+		250.0f,
+		315.0f,
+		400.0f,
+		500.0f,
+		630.0f,
+		800.0f,
+		1000.0f,
+		1250.0f,
+		1600.0f,
+		2000.0f,
+		2500.0f,
+		3150.0f,
+		4000.0f,
+		5000.0f,
+		6300.0f,
+		8000.0f,
+		10000.0f,
+		12500.0f
+	};
+	Lp = max(0.0f, log10(Lp) * 10.0f + 94.0f);
+	int maxIdx = 29 - 1;
+	int idx2 = 0;
+	while (idx2 <= maxIdx && Hz_data[idx2] < hz)
+		idx2++;
+
+	int idx = max(idx2 - 1, 0);
+	idx2 = min(idx2, maxIdx);
+	float w = idx != idx2 ? (hz - Hz_data[idx]) / (Hz_data[idx2] - Hz_data[idx]) : 0;
+	float Alpha_f = lerp(isofons[idx].x, isofons[idx2].x, w);
+	float Lu = lerp(isofons[idx].y, isofons[idx2].y, w);
+	float Tf = lerp(isofons[idx].z, isofons[idx2].z, w);
+	//Convert dB to Fons
+	float Bf = pow(0.4f * pow(10.0f, (Lp + Lu) * 0.1f - 9), Alpha_f) - pow(0.4f * pow(10.0f, (Tf + Lu) * 0.1f - 9), Alpha_f) + 0.005135f;
+	//float Ln = 40.0f*Mathf.Log10 (Bf) + 94.0f;
+	//convert Fons to dB
+	//float Af = 0.00447f * (Mathf.Pow (10.0f, 0.025f * Ln) - 1.15f) + Mathf.Pow (0.4f * Mathf.Pow (10f, 0.1f * (Tf + Lu) - 9.0f), Alpha_f);
+	//Af = Mathf.Max (Af, 0);
+	//Lp = 10.0f / Alpha_f * Mathf.Log10 (Af) - Lu + 94.0f;
+
+	//return Mathf.Pow (10.0f, (Ln - 94.0f)*0.1f);
+	return Bf * Bf * Bf * Bf; //optimized calculatation (convert dB to raw values)
+}
+
+[numthreads(64, 1, 1)]
+void FFT_Init(uint3 id : SV_DispatchThreadID)
+{
+	uint i = id.y * FFTWindow + id.x;
+	uint x = ((id.y + GridOffset.y) * FFTWindow / Multisamples + id.x) * SampleStep / BufferStep + GridOffset.x;
+	if (i % BufferStep == 0)
+		buffer[i].complex[0] = float2(Input[x] * Window[id.x / BufferStep], 0);
+	else
+		buffer[i].complex[0] = 0;
+}
+[numthreads(64, 1, 1)]
+void FFT_Part(uint3 id : SV_DispatchThreadID)
+{
+	uint i = id.x;
+
+	uint base = (i / N) * (N / 2);
+	uint offs = i % (N / 2);
+
+	uint i0 = base + offs;
+	uint i1 = i0 + FFTWindow / 2;
+
+	float2 v0 = buffer[id.y * FFTWindow + i0].complex[Source];
+	float2 v1 = buffer[id.y * FFTWindow + i1].complex[Source];
+
+	float a = -2.0f * UNITY_PI * float(i) / N;
+	float2 sc = float2(cos(a), sin(a));
+
+	buffer[id.y * FFTWindow + i].complex[Source ^ 1] = v0 + complexMultiply(v1, sc);
+}
+[numthreads(64, 1, 1)]
+void IFFT_Part(uint3 id : SV_DispatchThreadID)
+{
+	uint i = id.x;
+
+	uint base = (i / N) * (N / 2);
+	uint offs = i % (N / 2);
+
+	uint i0 = base + offs;
+	uint i1 = i0 + FFTWindow / 2;
+
+	float2 v0 = buffer[id.y * FFTWindow + i0].complex[Source];
+	float2 v1 = buffer[id.y * FFTWindow + i1].complex[Source];
+
+	float a = 2.0f * UNITY_PI * float(i) / N;
+	float2 sc = float2(cos(a), sin(a));
+
+	buffer[id.y * FFTWindow + i].complex[Source ^ 1] = v0 + complexMultiply(v1, sc);
+}
+
+void fft_pass(uint i, uint ns, uint source)
+{
+	uint base = (i / ns) * (ns / 2);
+	uint offs = i % (ns / 2);
+
+	uint i0 = base + offs;
+	uint i1 = i0 + FFTWindow / 2;
+
+	float2 v0 = values[i0][source];
+	float2 v1 = values[i1][source];
+
+	float a = -2.0f * UNITY_PI * float(i) / ns;
+	float2 sc = float2(cos(a), sin(a));
+
+	values[i][source ^ 1] = v0 + complexMultiply(v1, sc);
+}
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void FFT_Execute(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	
+	uint thread = id.y * FFTWindow + id.x;
+	if (localID < FFTWindow)
+		values[localID][0] = buffer[thread].complex[Source];
+	else
+		values[localID][0] = 0;
+	GroupMemoryBarrierWithGroupSync();
+
+	uint source = 0;
+	for (uint n = 2; n <= FFTWindow; n *= 2)
+	{
+		fft_pass(localID, n, source);
+		source ^= 1;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (localID < FFTWindow)
+	{
+		buffer[thread].complex[Source ^ 1] = values[localID][source];
+	}
+}
+
+[numthreads(64, 1, 1)]
+void AbsSpectrum(uint3 id : SV_DispatchThreadID)
+{
+	const uint EnergyCorrection = 4;
+	const uint _CalculateFons = 8;
+	const uint RemapVolume = 32;
+	const uint IFFT_Pass_mode = 1024;
+
+	float2 v = buffer[id.y * FFTWindow + id.x].complex[Source] * Scale / FFTWindow;
+	if (N & IFFT_Pass_mode)
+	{
+		Output[id.y * FFTWindow + id.x] = v.x;
+	}
+	else
+	{
+		float volume = complexAbs(v / sqrt(FFTWindow));
+		if (N & EnergyCorrection)
+			volume *= ((id.x + 0.5) / (FFTWindow / 2.0) * Frequency - 1000.0)/1000.0 + 1.0;
+		if (N & _CalculateFons)
+			volume = getFons((id.x + 0.5) * Frequency / FFTWindow, volume);
+		Output[id.y * FFTWindow / 2 + id.x] = volume;
+	}
+}
+
+void ifft_pass(uint i, uint ns, uint source)
+{
+	uint base = (i / ns) * (ns / 2);
+	uint offs = i % (ns / 2);
+
+	uint i0 = base + offs;
+	uint i1 = i0 + FFTWindow / 2;
+
+	float2 v0 = values[i0][source];
+	float2 v1 = values[i1][source];
+
+	float a = 2.0f * UNITY_PI * float(i) / ns;
+	float2 sc = float2(cos(a), sin(a));
+
+	values[i][source ^ 1] = v0 + complexMultiply(v1, sc);
+}
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void IFFT_Execute(uint3 id : SV_DispatchThreadID)
+{
+	uint batches = MAX_WORKSIZE / FFTWindow;
+	uint thread = id.y * MAX_WORKSIZE + id.x;
+	bool inRange = thread < FFTWindow * GridSize.y;
+
+	values[id.x][0] = inRange ? buffer[thread].complex[Source] : 0;
+	GroupMemoryBarrierWithGroupSync();
+
+	uint source = 0;
+	for (uint n = 2; n <= FFTWindow; n *= 2)
+	{
+		ifft_pass(id.x, n, source);
+		source ^= 1;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if(inRange)
+		Output[thread] = values[id.x][source].x;
+}
+
+[numthreads(64, 1, 1)]
+void DFT_Execute(uint3 id : SV_DispatchThreadID)
+{
+	uint i = id.x;
+	float2 integral = 0;
+	float a1 = 2.0 * UNITY_PI * i / FFTWindow;
+	float w = Window[id.x];
+
+	for (uint t = 0; t < FFTWindow; t++)
+	{
+		float2 k;
+		sincos(a1 * t, k.x, k.y);
+		integral += k * w * Input[(id.y + GridOffset.y) * FFTWindow / Multisamples + t + GridOffset.x];
+	}
+	if (i <= FFTWindow / 2)
+	{
+		float volume = sqrt(dot(integral, integral) / 2.0) * 2.0 / FFTWindow;
+		Output[id.y * FFTWindow / 2 + i] = volume;
+	}
+}
+
+groupshared float dftPart[MAX_WORKSIZE];
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void DFT_BPM(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)  //For BPM analize
+{
+	//const uint n = MAX_WORKSIZE / 256;
+	uint iterations = GridSize.x / MAX_WORKSIZE; //256 BPM range [40..295]
+	const float minBPS = 40.0;
+	float2 integral = 0;
+	float a1 = 2.0 * UNITY_PI * (minBPS + id.y) / 60.0 / Frequency;
+
+	for (uint t = 0; t < iterations; t++)
+	{
+		uint idx = t * MAX_WORKSIZE + id.x;
+		float2 k = float2(sin(a1 * idx), cos(a1 * idx));
+		integral += k * Input[idx];
+	}
+	//Output[id.y] = sqrt(dot(integral, integral) / 2.0) * 2.0 / iterations;
+	
+	dftPart[localID] = sqrt(dot(integral, integral) / 2.0) * 2.0 / iterations;
+
+	for (uint offset = MAX_WORKSIZE / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();	// wait for all other work-items to finish previous iteration.
+		if (localID < offset)
+			dftPart[localID] += dftPart[localID + offset];
+	}
+
+	if (localID == 0)	// the root of the reduction subtree
+		Output[id.y] = dftPart[0];
+	
+}
+
+groupshared float peaks[MAX_WORKSIZE];
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void GetPeaks(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)
+{
+	//Init phase: calculate peaks
+	float value;
+	uint i = GridOffset.x + id.x;
+	if (i < GridSize.x)
+		value = Input[i];
+	else
+		value = 0;
+	peaks[localID] = value * value;
+	for (uint offset = MAX_WORKSIZE / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();	// wait for all other work-items to finish previous iteration.
+		if (localID < offset)
+			peaks[localID] += peaks[localID + offset]; 
+	}
+	//Store peak in temporary buffer for main phase
+	if (localID == 0)
+		Output[groupID.x] = sqrt(peaks[0] / MAX_WORKSIZE);
+}
+
+[numthreads(8, 8, 1)]
+void RenderBars(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	const uint LogFrequency = 1;
+	const uint LogAmplitude = 2;
+	const uint EnergyCorrection = 4;
+	const uint CalculateFons = 8;
+	const uint SpectrumEnegry = 2048;
+	//GridSize.z = bars
+	//GridOffset.y = offset in samples for Input
+	float2 pos = (float2)id.xy / GridSize.xy;
+	float timeLength = (float)GridSize.z * FFTWindow / Multisamples / Frequency;
+	float startTime = Time - timeLength / 2.0;
+	float timePerBar = timeLength / GridSize.z;
+	float timePerPixel = timeLength / GridSize.x;
+	float timeInPixel = id.x * timePerPixel + startTime;
+	float fBar = timeInPixel / timePerBar - (GridOffset.y + 0.5*FFTWindow) * Multisamples / FFTWindow + 0.5 / Multisamples;
+	float n = (float)GridSize.z / GridSize.x;
+	uint bar = floor(fBar);
+	uint samples = ceil(n);
+	float volume = 0;
+	if (fBar >= 0)
+	{
+		for (uint i = 0; i < samples; i++)
+			volume += Input[bar + i];
+		volume /= samples;
+	}
+
+	[branch] if (N & LogAmplitude)
+	{
+		volume = (log10(volume) + Scale) / Scale;
+	}
+	else
+		volume *= Scale;
+	float3 color;
+	[branch] if (N & SpectrumEnegry)
+	{
+		float r = volume * 4.0 - 1.0;
+		float g = max(1.5 - abs(4.0 * volume - 1.5), 4.0 * volume - 3.0);
+		float b = abs(4.0 * volume - 2.0) - 1.0;
+		color = saturate(float3(r, g, b));
+	}
+	else
+		color = 1.0;
+
+	if (volume > abs(pos.y - 0.5) * 2.0)
+		color = color;
+	else if (abs(volume) > abs(pos.y - 0.5) * 2.0)
+		color = float3(0, 0, 1);
+	else
+		color = 0;
+
+	color *= timeInPixel < Time ? 1.0 : 0.25;
+
+	RenderTexture[id.xy] = float4(color, 1.0);
+}
+
+[numthreads(8, 8, 1)]
+void RenderSpectrumKernel(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	//GridSize.xy - render texture width and height
+	//GridSize.z = bars
+	//GridOffset.y = offset in samples for Input
+	float timeLength = (float)GridSize.z * FFTWindow / Multisamples / Frequency;
+	float startTime = Time - timeLength / 2.0;
+	float timePerBar = timeLength / GridSize.z;
+	float timePerPixel = timeLength / GridSize.x;
+	float timeInPixel = id.x * timePerPixel + startTime;
+	float fChunk = timeInPixel / timePerBar - (GridOffset.y + 0.5 * FFTWindow) * Multisamples / FFTWindow + 0.5 / Multisamples;
+	uint chunk = floor(fChunk);
+	uint bins = FFTWindow / 2;
+	float n = (float)bins / GridSize.y;
+	uint bar = floor(id.y * n);
+	uint samples = ceil(n);
+	float volume = 0;
+	for (uint i = 0; i < samples; i++)
+		volume += Input[chunk * bins + bar + i];
+	volume /= samples;
+	
+	float3 color;
+	const uint LogAmplitude = 2;
+	if (N & LogAmplitude)
+	{
+		volume = (log10(volume) + Scale) / Scale;
+	}
+	else
+		volume *= Scale;
+	const uint SpectrumEnegry = 2048;
+	[branch] if (N & SpectrumEnegry)
+	{
+		//float r = volume * 4.0 - 1.0;
+		//float g = max(1.5 - abs(4.0 * volume - 1.5), 4.0 * volume - 3.0);
+		//float b = abs(4.0 * volume - 2.0) - 1.0;
+
+		float r = volume * 5.0 - 2.0;
+		float g = max(1.5 - abs(5.0 * volume - 2.5), 5.0 * volume - 4.0);
+		float b = max(1.0 - abs(5.0 * volume - 1.0), 5.0 * volume - 4.0);
+		color = saturate(float3(r, g, b));
+	}
+	else
+		color = volume;
+	float hzPerBin = (float)Frequency / FFTWindow;
+	const uint LogFrequency = 1;
+	if (N & LogFrequency)
+	{
+		float x = (float)bar / bins; // normalized Hz
+		bar = floor(bins * x * exp2(6.9 * (x - 1.0)));
+	}
+	  
+	bool leftBorder = (int)bar < floor(MinimumValues.x / hzPerBin);
+	bool rightBorder = (int)bar >= ceil(MaximumValues.x / hzPerBin);
+	if (leftBorder || rightBorder)
+		color = lerp(color, float3(0.5, 0.0, 0.0), 0.3);
+
+	color *= timeInPixel < Time ? 1.0 : 0.25;
+	RenderTexture[id.xy] = float4(color, 1.0);
+}
+
+[numthreads(64, 1, 1)]	//256 BPM range [40..295]
+void BeatFinder(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	const float minBPS = 40.0;
+	float a1 = 2.0 * UNITY_PI * (minBPS + id.x) / 60.0 / Frequency * 1024.0;
+	float2 integral = 0;
+	for (uint t = 0; t < GridSize.x; t++)
+	{
+		float2 k = float2(cos(a1 * t), sin(a1 * t));
+		integral += k * Input[t];
+	}
+	Output[id.x + 0] = sqrt(dot(integral, integral) / 2.0) * 2.0 / GridSize.x;
+	Output[id.x + 256] = atan2(integral.y, integral.x) / UNITY_PI;
+}
+
+Texture2D<float> Lut;
+Texture2D<float> CurveLut;
+
+float getFons_LUT(float hz, float volume)
+{
+	float2 texel;
+	texel = log2(float2(hz, volume) * 64.0 + 1.0) / 8.0;
+	return Lut.SampleLevel(samplerLutClampLinear, texel, 0);
+}
+
+[numthreads(8, 8, 1)]
+void Precompute_Loudness_LUT(
+	uint3 id : SV_DispatchThreadID,  //global index
+	uint3 offset : SV_GroupID,        //group index 
+	uint3 localID : SV_GroupThreadID, //3D local index
+	uint thread : SV_GroupIndex       //local index
+)
+{
+}
+
+[numthreads(8, 8, 1)]
+void CreateFonLUT(uint3 coord : SV_DispatchThreadID)
+{
+	uint2 size = GridSize.xy - 1;
+	float color = getFons(pow(2, 8.0f * coord.x / size.x) / (pow(2, 8) - 1) * 24000.0f, pow(2, 8.0f * coord.y / size.y) / (pow(2, 8) - 1));
+	RenderTexture[coord.xy] = color;
+}
+[numthreads(64, 1, 1)]
+void CalculateFons(uint3 id : SV_DispatchThreadID)
+{
+	float hzPerBin = float(Frequency) / FFTWindow;
+	Output[id.y * FFTWindow / 2 + id.x] = getFons(id.x * hzPerBin, Input[id.y * FFTWindow /2 + id.x]);
+}
+
+groupshared float fons[64];
+
+[numthreads(1, 64, 1)]
+void DrawHistogramVolume(uint3 coord : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint3 localID : SV_GroupThreadID, uint index : SV_GroupIndex)
+{
+	if (index < 64)
+	{
+		uint w = FFTWindow / 2;
+		float n = float(w) / GridSize.x;
+		float k = log2(w) / w;
+		float start = exp2(coord.x * n * k) - 1.0;
+		float end = exp2((coord.x * n + n) * k) - 1.0;
+		uint max_samples = ceil(end - start);
+		//uint base = (GridOffset.y + coord.y) * w + trunc(start);
+		fons[index] = 0;
+		float hzPerBin = float(Frequency) / FFTWindow;
+		for (uint s = 0; s < max_samples; s++)
+		{
+			uint x = trunc(start) + s;
+			uint i = (GridOffset.y + index) * w + x;
+			//v.x += getFons_LUT(float(x) / w, Input[i.x]);
+			//v.y += getFons_LUT(float(x) / w, Input[i.y]);
+			fons[index] += getFons(x * hzPerBin, Input[i]);
+		}
+		fons[index] = fons[index] * 10.0 / max_samples;
+	}
+	GroupMemoryBarrierWithGroupSync();
+
+	float volume = lerp(fons[0], fons[1], frac(Time)) * Scale;
+	if (volume * GridSize.y > float(coord.y))
+		RenderTexture[coord.xy] = float4(0, 0.7, 0, 1);
+	else
+		RenderTexture[coord.xy] = float4(0, 0, 0, 1);
+}
+
+//Not working
+[numthreads(64, 1, 1)]
+void Resample(uint3 id : SV_DispatchThreadID)
+{
+	/*float2 result = 0;
+	float freqScale = float(FFTWindow) / GridSize.x;// * Scale;
+	float k = frac(id.x * freqScale);
+	uint lowIdx = (uint)floor(id.x * freqScale);
+	uint hiIdx = (uint)ceil(id.x * freqScale);
+	if (hiIdx < FFTWindow)
+	{
+		result += buffer[(id.y * FFTWindow + lowIdx) * 2 + Source] * (1.0 - k);
+		result += buffer[(id.y * FFTWindow +  hiIdx) * 2 + Source] * k;
+	}
+	uint i = (id.y * GridSize.x + id.x) * 2;
+	complexOutput[i + 0] = result;
+	complexOutput[i + 1] = 0;*/
+	if (id.x < FFTWindow)
+	{
+		buffer[id.y * GridSize.x + id.x].complex[Source] = buffer[id.y * FFTWindow + id.x].complex[Source];
+		complexOutput[(id.y * GridSize.x + id.x)*2 + 1] = 0;
+	}
+	else
+	{
+		complexOutput[(id.y * GridSize.x + id.x) * 2 + 0] = 0;
+		complexOutput[(id.y * GridSize.x + id.x) * 2 + 1] = 0;
+	}
+}
+
+[numthreads(16, 16, 1)]
+void IDFT(uint3 id : SV_DispatchThreadID)
+{
+	float a = 2.0 * UNITY_PI * id.x / FFTWindow;
+	float2 c = 0;
+	for (uint x = 0; x < FFTWindow; x++)
+	{
+		float2 sc;
+		float2 v = Input[x];
+		sincos(a * x, sc.y, sc.x);
+		c += complexMultiply(v, sc);
+	}
+	Output[id.x] = complexAbs(c / FFTWindow);
+}
+//https://forum.unity.com/threads/need-way-to-evaluate-animationcurve-in-the-job.532149/
+float Evaluate(in float iInterp, in float iLeft, in float vLeft, in float tLeft, in float iRight, in float vRight, in float tRight)
+{
+	float t = lerp(iLeft, iRight, iInterp);
+	float4 scale = iRight - iLeft;
+	scale.xy = 1;
+
+	float4 parameters = float4(t * t * t, t * t, t, 1);
+	float4x4 hermiteBasis = float4x4(
+		2, -2, 1, 1,
+		-3, 3, -2, -1,
+		0, 0, 1, 0,
+		1, 0, 0, 0
+		);
+
+	float4 control = float4(vLeft, vRight, tLeft, tRight) * scale;
+	float4 basisWithParams = mul(parameters, hermiteBasis);
+	float4 hermiteBlend = control * basisWithParams;
+	return dot(hermiteBlend, 1);
+}
+
+inline float Evaluate(float t, Keyframe left, Keyframe right)
+{
+	return Evaluate(t, left.time, left.value, left.outTangent, right.time, right.value, right.inTangent);
+}
+
+inline float Evaluate(Keyframe left, Keyframe right, float time)
+{
+	float scale = right.time - left.time;
+	float t = (time - left.time) / scale;
+	float t2 = t * t;
+	float t3 = t2 * t;
+
+	float h10 = t3 - 2.0f * t2 + t;
+	float h01 = 3.0f * t2 - 2.0f * t3;
+	float h00 = 1.0f - h01;
+	float h11 = t3 - t2;
+	return h00 * left.value
+		+ h10 * scale * left.outTangent
+		+ h01 * right.value
+		+ h11 * scale * right.inTangent;
+}
+
+inline float sqr(float x)
+{
+	return x * x;
+}
+
+[numthreads(64, 1, 1)]
+void FillKeyframes(uint3 id : SV_DispatchThreadID)
+{
+	if (id.x < GridSize.x)
+	{
+		Keyframe k;
+		k.time = 1.0 / Frequency * id.x * FFTWindow / Multisamples;
+		k.value = Input[id.x];
+		k.inTangent = 0.0;
+		k.outTangent = 0.0;
+		k.tangentMode = 0;
+		OutputKeyframes[id.x] = k;
+	}
+}
+
+groupshared Keyframe kf[MAX_WORKSIZE];
+groupshared bool kf_mark[MAX_WORKSIZE];
+groupshared float kf_rms[MAX_WORKSIZE];
+RWBuffer<uint> keys_count; //lasts keyfrafes in groups
+//ConsumeStructuredBuffer<Keyframe> InputKeyframes;
+//AppendStructuredBuffer<Keyframe> OutputKeyframes;
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void DecimateKeyframesKernel(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	//Разделям задачу оптимизации между потоками
+	//Рабочая группа по 1024 потока берет 1024 ключевых кадра
+	if (id.x < GridSize.x)
+		kf[localID] = Keyframes[id.x];
+	else
+		kf[localID] = (Keyframe)0;
+	//
+	float quality = Scale;
+	//Вычисляем значение на месте текущего ключа по соседним и записываем средне квадратичную разность между значением ключа и апроксимации по соседям
+	kf_rms[localID] = sqr(Evaluate(kf[max(0, localID - 1)], kf[min(MAX_WORKSIZE - 1, localID + 1)], 0.5) - kf[localID].value);
+	
+	GroupMemoryBarrierWithGroupSync();
+	float3 rms = float3(kf_rms[max(0, localID - 1)], kf_rms[localID], kf_rms[min(MAX_WORKSIZE - 1, localID + 1)]);
+
+	if(rms.y < rms.x && rms.y < rms.z)
+		kf_mark[localID] = rms.y > quality;
+	else
+		kf_mark[localID] = true;
+
+
+	//Удаляем и записываем результат для правого ключа
+	//float rms_R = sqr(Evaluate(kf[localID0], kf[localID + 3], 0.5) - kf[localID + 2].value);
+	//Сравниваем какой вариант лучше: сохранить или удалить каждый из ключей
+
+}
+
+[numthreads(64, 1, 1)]
+void CurveFilter(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	//GridSize.x - input values count
+	//GridSize.z - keyframes count
+	float timePerWindow = (float)FFTWindow / Frequency;
+	float time = timePerWindow * ((id.x + 0.5) / Multisamples + 0.5);
+
+	Keyframe k0 = Keyframes[0];
+	Keyframe k1 = k0;
+	for (uint i = 1; i < GridSize.z; i++)
+	{
+		k1 = Keyframes[i];
+		if (k1.time > time)
+			break;
+		k0 = k1;
+	}
+	float value;
+	if (time >= k1.time)
+		value = k1.value;
+	else if (time <= k0.time)
+		value = k0.value;
+	else
+		value = Evaluate(k0, k1, time);
+	Output[id.x] = max(Output[id.x], value);
+}
+[numthreads(64, 1, 1)]
+void RemapKernel(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	if (id.x < GridSize.x)
+	{
+		//GridSize.x - input values count
+		//GridSize.z - keyframes count
+		float value = saturate(Input[id.x + GridOffset.x]);
+
+		Keyframe k0 = Keyframes[0];
+		Keyframe k1 = k0;
+		for (uint i = 1; i < GridSize.z; i++)
+		{
+			k1 = Keyframes[i];
+			if (k1.time > value)
+				break;
+			k0 = k1;
+		}
+		if (value >= k1.time)
+			value = k1.value;
+		else if (value <= k0.time)
+			value = k0.value;
+		else
+			value = Evaluate(k0, k1, value);
+		Output[id.x] = value;
+	}
+}
+
+[numthreads(64, 1, 1)]
+void KeyframesCreator(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	if (id.x < GridSize.x)
+	{
+		//GridSize.x - input values count
+		//GridSize.y - channels output
+		//GridSize.z - keyframes count
+		float value = Source > 1 ? frac(Input[id.x] * Source) : saturate(Input[id.x]);
+		float min[4] = { MinimumValues };
+		float max[4] = { MaximumValues };
+		float timePerWindow = (float)FFTWindow / Frequency;
+		float time = timePerWindow * ((id.x + 0.5) / Multisamples + 0.5);
+		for (uint channel = 0; channel < GridSize.y; channel++)
+		{
+			Keyframe result;
+			//result.time = 1.0 / Frequency * id.x * FFTWindow / Multisamples;
+			result.time = time;
+			result.value = lerp(min[channel], max[channel], value);
+			result.inTangent = 0;
+			result.outTangent = 0;
+			result.tangentMode = 1; //Broken (inTangent != outTangent)
+			OutputKeyframes[id.x + channel * GridSize.x] = result;
+		}
+	}
+}
+[numthreads(64, 1, 1)]
+void RemapGradientKernel(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	if (id.x < GridSize.x)
+	{
+		//GridSize.x - input values count
+		//GridSize.y - channels output
+		//GridSize.z - colorkeyframes count
+		//N - alpha keyframes gradient count
+		//Source - loops count the gradient
+		float value = Source > 1 ? frac(Input[id.x] * Source) : saturate(Input[id.x]);
+		float timePerWindow = (float)FFTWindow / Frequency;
+		float time = timePerWindow * ((id.x + 0.5) / Multisamples + 0.5);
+		for (uint channel = 0; channel < GridSize.y; channel++)
+		{
+			Keyframe k0 = Keyframes[channel * GridSize.z];
+			Keyframe k1 = k0;
+			uint keysCount = channel == 3 ? N : GridSize.z;
+			for (uint i = 1; i < keysCount; i++)
+			{
+				k1 = Keyframes[channel * GridSize.z + i];
+				if (k1.time > value)
+					break;
+				k0 = k1;
+			}
+			Keyframe result;
+			result.time = time;
+			if (value >= k1.time)
+				result.value = k1.value;
+			else if (value <= k0.time)
+				result.value = k0.value;
+			else
+				result.value = lerp(k0.value, k1.value, saturate((value - k0.time) / (k1.time - k0.time)));
+			result.inTangent = 0;
+			result.outTangent = 0;
+			result.tangentMode = 1; //Broken (inTangent != outTangent)
+			OutputKeyframes[id.x + channel * GridSize.x] = result;
+		}
+	}
+}
+[numthreads(64, 1, 1)]
+void ConvertToQuaternions(uint3 id : SV_DispatchThreadID)
+{
+	// yaw (Z), pitch (Y), roll (X)
+	float x = OutputKeyframes[id.x + 0 * GridSize.x].value * UNITY_PI / 180.0;
+	float y = OutputKeyframes[id.x + 1 * GridSize.x].value * UNITY_PI / 180.0;
+	float z = OutputKeyframes[id.x + 2 * GridSize.x].value * UNITY_PI / 180.0;
+	// Abbreviations for the various angular functions
+	float cy = cos(z * 0.5);
+	float sy = sin(z * 0.5);
+	float cp = cos(y * 0.5);
+	float sp = sin(y * 0.5);
+	float cr = cos(x * 0.5);
+	float sr = sin(x * 0.5);
+
+	float4 q;
+	q.w = cy * cp * cr + sy * sp * sr;
+	q.x = cy * cp * sr - sy * sp * cr;
+	q.y = sy * cp * sr + cy * sp * cr;
+	q.z = sy * cp * cr - cy * sp * sr;
+
+	OutputKeyframes[id.x + 0 * GridSize.x].value = q.x;
+	OutputKeyframes[id.x + 1 * GridSize.x].value = q.y;
+	OutputKeyframes[id.x + 2 * GridSize.x].value = q.z;
+	OutputKeyframes[id.x + 3 * GridSize.x].value = q.w;
+}
+
+float acosh(float x) 
+{ 
+	return log(x + sqrt(x * x - 1.0f)); 
+}
+float cheby_poly(int n, float x) 
+{
+	if (abs(x) <= 1) 
+		return cos(n * acos(x));
+	else              
+		return cosh(n * acosh(x));
+}
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void DolphChebyshevWindow(uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)
+{
+	/*
+	// calculate a chebyshev window of size N, store coeffs in out as in Antoniou
+	//-out should be array of size N
+	//-atten is the required sidelobe attenuation (e.g. if you want -60dB atten, use '60')
+
+	float atten = 40;
+	float M, n, sum = 0, max = 0;
+	float tg = pow(10, atten / 20);  // 1/r term [2], 10^gamma [2] 
+	float x0 = cosh((1.0 / (FFTWindow - 1)) * acosh(tg));
+	M = (FFTWindow - 1) / 2 + 0.5;
+	for (uint nn = 0; nn < (FFTWindow / 2 + 1); nn++) 
+	{
+		n = nn - M;
+		sum = 0;
+		for (int i = 1; i <= M; i++) 
+		{
+			sum += cheby_poly(FFTWindow - 1, x0 * cos(UNITY_PI * i / FFTWindow)) * cos(2.0 * n * UNITY_PI * i / FFTWindow);
+		}
+		Output[nn] = tg + 2 * sum;
+		Output[FFTWindow - nn - 1] = Output[nn];
+		if (Output[nn] > max)
+			max = Output[nn];
+	}
+	for (uint i = 0; i < FFTWindow; i++) 
+		Output[i] /= max; // normalise everything
+	*/
+
+	//another variant to compute window
+	float db = Scale;
+	float d = pow(10.0, db / 20.0);
+	float acosh_db = acosh(d);
+	float m = FFTWindow - 1;
+	float j = groupID.x;
+
+	reductionSums[localID] = 0;
+		
+	for (uint k = localID; k < FFTWindow; k += MAX_WORKSIZE)
+	{
+		float t = UNITY_PI * (k - m * 0.5) / FFTWindow;
+		float x = cosh(acosh_db / m) * cos(t);
+		float w = abs(x) <= 1.0 ? cos(m * acos(x)) : cosh(m * acosh(x));
+		reductionSums[localID] += w * cos(t * (j - m * 0.5) * 2);
+	}
+	for (uint offset = MAX_WORKSIZE / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();	// wait for all other work-items to finish previous iteration.
+		if (localID < offset)
+			reductionSums[localID] += reductionSums[localID + offset];
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if(localID == 0)
+		Output[groupID.x] = reductionSums[0];
+	/*float scale = 1.0f / Output[FFTWindow / 2];
+	for (uint k = 0; k < FFTWindow; k++)
+	{
+		Output[k] *= scale;
+	}*/
+}
+
+[numthreads(MAX_WORKSIZE, 1, 1)]
+void ComputeResolve(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupIndex)
+{
+	uint partCount = FFTWindow / Multisamples;
+	//uint iterations = (partCount - 1) / MAX_WORKSIZE + 1;
+	
+	uint base = (FFTWindow - partCount) / 2 + partCount * id.y;
+	reductionSums[localID] = 0;
+	for (uint j = localID; j < partCount; j += MAX_WORKSIZE)
+	{
+		if (base + j < FFTWindow)
+			reductionSums[localID] += Window[base + j];
+	}
+
+	for (uint offset = MAX_WORKSIZE / 2; offset > 0; offset /= 2)
+	{
+		GroupMemoryBarrierWithGroupSync();
+		if (localID < offset)
+			reductionSums[localID] += reductionSums[localID + offset];
+
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if (localID == 0)
+	{
+		//uint i = Multisamples / 2 + id.y;
+		//Output[Multisamples / 2 + id.y] = reductionSums[0] / partCount;
+		//Output[(Multisamples & 0xFE) - i] = reductionSums[0] / partCount;
+		Output[(Multisamples & 0xFE) - id.y] = 0;
+		Output[id.y] = reductionSums[0] / partCount;
+		
+	}
+}
+/*
+[numthreads(1, 64, 1)]
+void ResolveMultisamplesKernel(int3 id : SV_DispatchThreadID)
+{
+	float coeffs[32];
+	int s;
+	for (s = 1; s < (int)Multisamples; s++)
+	{
+		coeffs[s] = Window[s] * Scale;
+	}
+	float sum = 0;
+	float value = 0;
+	for (s = Multisamples - 1; s > 0; s--)
+	{
+		if (id.y - s >= 0)
+		{
+			sum += coeffs[s];
+			value -= coeffs[s] * Input[(id.y - s) * GridSize.x + id.x];
+		}
+	}
+	for (s = 1; s < (int)Multisamples; s++)
+	{
+		if (id.y + s < (int)GridSize.y)
+		{
+			sum += coeffs[s];
+			value -= coeffs[s] * Input[(id.y + s) * GridSize.x + id.x];
+		}
+	}
+	value += (1.0 + sum) * Input[id.y * GridSize.x + id.x];
+	Output[id.y * GridSize.x + id.x] = value;
+}
+*/
+[numthreads(1, 64, 1)]
+void ResolveMultisamplesKernel(uint3 id : SV_DispatchThreadID)
+{
+	float value = 0;
+	uint center = Multisamples / 2;
+	uint wSize = center * 2 + 1;
+	if(id.y >= center && id.y < GridSize.y - center)
+		for (uint s = 0; s < wSize; s++)
+		{
+			float w = Window[center * wSize + s];
+			w = lerp(s == center ? MaximumValues.x : 0.0, w, Scale);
+			value += w * Input[(id.y + s - center) * GridSize.x + id.x];
+		}
+	/*else if(id.y < center)
+		for (uint s = 0; s < wSize; s++)
+		{
+			float w = Window[id.y * wSize + s];
+			w = lerp(s == id.y ? 1.0 : 0.0, w, Scale);
+			value += w * Input[s * GridSize.x + id.x];
+		}
+	else
+		for (uint s = 0; s < wSize; s++)
+		{
+			float w = Window[(Multisamples - (GridSize.y - id.y)) * wSize + s];
+			w = lerp((wSize - s) == (GridSize.y - id.y) ? 1.0 : 0.0, w, Scale);
+			value += w * Input[(GridSize.y + s - wSize) * GridSize.x + id.x];
+		}
+		*/
+	Output[id.y * GridSize.x + id.x] = value;
+}
+
+float SineExpansion(uint i, float c0, float c1 = 0, float c2 = 0, float c3 = 0, float c4 = 0, float c5 = 0, float c6 = 0, float c7 = 0, float c8 = 0, float c9 = 0, float c10 = 0)
+{
+	// z = 2 * pi * (0:N-1)' / N;   // Cosine Vector
+	float a = 2.0f * UNITY_PI * i / FFTWindow;
+
+	float wc = c0;
+	wc += c1 * cos(a);
+	wc += c2 * cos(2.0f * a);
+	wc += c3 * cos(3.0f * a);
+	wc += c4 * cos(4.0f * a);
+	wc += c5 * cos(5.0f * a);
+	wc += c6 * cos(6.0f * a);
+	wc += c7 * cos(7.0f * a);
+	wc += c8 * cos(8.0f * a);
+	wc += c9 * cos(9.0f * a);
+	wc += c10 * cos(10.0f * a);
+
+	return wc;
+}
+
+#define WindowType_None		0
+#define WindowType_Rectangular  1
+#define WindowType_Bartlett 2
+#define WindowType_Welch	3
+#define WindowType_Sine		4
+#define WindowType_Hann		5
+#define WindowType_Hanning	6
+#define WindowType_Hamming	7
+#define WindowType_BH92		8
+#define WindowType_Nutall3	9
+#define WindowType_Nutall3A 10
+#define WindowType_Nutall3B 11
+#define WindowType_Nutall4	12
+#define WindowType_Nutall4A 13
+#define WindowType_Nutall4B 14
+#define WindowType_SFT3F	15
+#define WindowType_SFT4F	16
+#define WindowType_SFT5F	17
+#define WindowType_SFT3M	18
+#define WindowType_SFT4M	19
+#define WindowType_SFT5M	20
+#define WindowType_FTNI		21
+#define WindowType_FTHP		22
+#define WindowType_FTSRS	23
+#define WindowType_HFT70	24
+#define WindowType_HFT90D	25
+#define WindowType_HFT95	26
+#define WindowType_HFT116D	27
+#define WindowType_HFT144D	28
+#define WindowType_HFT169D	29
+#define WindowType_HFT196D	30
+#define WindowType_HFT223D	31
+#define WindowType_HFT248D	32
+#define WindowType_Exp		33
+#define WindowType_HannPoisson	   34
+#define WindowType_DolphChebyshev  35
+[numthreads(64, 1, 1)]
+void CreateWindow(uint3 id : SV_DispatchThreadID)
+{
+	uint i = id.x;
+	uint windowType = N;
+	[branch] switch (windowType)
+	{
+	case WindowType_None:
+	case WindowType_Rectangular:	Output[i] = 1.0f; break;
+	case WindowType_Bartlett:		Output[i] = 2.0f / FFTWindow * (FFTWindow / 2.0f - abs(i - (FFTWindow - 1.0f) / 2.0f)); break;
+	case WindowType_Welch:			Output[i] = 1.0f - pow(((2.0f * i) / FFTWindow) - 1.0f, 2.0f); break;
+	case WindowType_Sine:			Output[i] = sin(UNITY_PI * i / FFTWindow); break;
+	case WindowType_Hann:			Output[i] = SineExpansion(i, 0.5f, -0.5f); break;
+	case WindowType_Hanning:		Output[i] = SineExpansion(i, 0.5f, -0.5f); break;
+	case WindowType_Hamming:		Output[i] = SineExpansion(i, 0.54f, -0.46f); break;
+	case WindowType_BH92:			Output[i] = SineExpansion(i, 0.35875f, -0.48829f, 0.14128f, -0.01168f); break; // Also known as: Blackman-Harris
+	case WindowType_Nutall3:		Output[i] = SineExpansion(i, 0.375f, -0.5f, 0.125f); break;
+	case WindowType_Nutall3A:		Output[i] = SineExpansion(i, 0.40897f, -0.5f, 0.09103f); break;
+	case WindowType_Nutall3B:		Output[i] = SineExpansion(i, 0.4243801f, -0.4973406f, 0.0782793f); break;
+	case WindowType_Nutall4:		Output[i] = SineExpansion(i, 0.3125f, -0.46875f, 0.1875f, -0.03125f); break;
+	case WindowType_Nutall4A:		Output[i] = SineExpansion(i, 0.338946f, -0.481973f, 0.161054f, -0.018027f); break;
+	case WindowType_Nutall4B:		Output[i] = SineExpansion(i, 0.355768f, -0.487396f, 0.144232f, -0.012604f); break;
+	case WindowType_SFT3F:			Output[i] = SineExpansion(i, 0.26526f, -0.5f, 0.23474f); break;
+	case WindowType_SFT4F:			Output[i] = SineExpansion(i, 0.21706f, -0.42103f, 0.28294f, -0.07897f); break;
+	case WindowType_SFT5F:			Output[i] = SineExpansion(i, 0.1881f, -0.36923f, 0.28702f, -0.13077f, 0.02488f); break;
+	case WindowType_SFT3M:			Output[i] = SineExpansion(i, 0.28235f, -0.52105f, 0.19659f); break;
+	case WindowType_SFT4M:			Output[i] = SineExpansion(i, 0.241906f, -0.460841f, 0.255381f, -0.041872f); break;
+	case WindowType_SFT5M:			Output[i] = SineExpansion(i, 0.209671f, -0.407331f, 0.281225f, -0.092669f, 0.0091036f); break;
+	case WindowType_FTNI:			Output[i] = SineExpansion(i, 0.2810639f, -0.5208972f, 0.1980399f); break;
+	case WindowType_FTHP:			Output[i] = SineExpansion(i, 1.0f, -1.912510941f, 1.079173272f, -0.1832630879f); break;
+	case WindowType_HFT70:			Output[i] = SineExpansion(i, 1.0f, -1.90796f, 1.07349f, -0.18199f); break;
+	case WindowType_FTSRS:			Output[i] = SineExpansion(i, 1.0f, -1.93f, 1.29f, -0.388f, 0.028f); break;
+	case WindowType_HFT90D:			Output[i] = SineExpansion(i, 1.0f, -1.942604f, 1.340318f, -0.440811f, 0.043097f); break;
+	case WindowType_HFT95:			Output[i] = SineExpansion(i, 1.0f, -1.9383379f, 1.3045202f, -0.4028270f, 0.0350665f); break;
+	case WindowType_HFT116D:		Output[i] = SineExpansion(i, 1.0f, -1.9575375f, 1.4780705f, -0.6367431f, 0.1228389f, -0.0066288f); break;
+	case WindowType_HFT144D:		Output[i] = SineExpansion(i, 1.0f, -1.96760033f, 1.57983607f, -0.81123644f, 0.22583558f, -0.02773848f, 0.00090360f); break;
+	case WindowType_HFT169D:		Output[i] = SineExpansion(i, 1.0f, -1.97441842f, 1.65409888f, -0.95788186f, 0.33673420f, -0.06364621f, 0.00521942f, -0.00010599f); break;
+	case WindowType_HFT196D:		Output[i] = SineExpansion(i, 1.0f, -1.979280420f, 1.710288951f, -1.081629853f, 0.448734314f, -0.112376628f, 0.015122992f, -0.000871252f, 0.000011896f); break;
+	case WindowType_HFT223D:		Output[i] = SineExpansion(i, 1.0f, -1.98298997309f, 1.75556083063f, -1.19037717712f, 0.56155440797f, -0.17296769663f, 0.03233247087f, -0.00324954578f, 0.00013801040f, -0.00000132725f); break;
+	case WindowType_HFT248D:		Output[i] = SineExpansion(i, 1.0f, -1.985844164102f, 1.791176438506f, -1.282075284005f, 0.667777530266f, -0.240160796576f, 0.056656381764f, -0.008134974479f, 0.000624544650f, -0.000019808998f, 0.000000132974f); break;
+	case WindowType_Exp:			Output[i] = exp(-2.0*Scale/(8.69* FFTWindow)*abs(i - FFTWindow / 2.0)); break;
+	case WindowType_HannPoisson:	Output[i] = 0.5*(1.0+cos(2.0* UNITY_PI*((float)i / FFTWindow - 0.5)))*exp(-2.0 * Scale / 20.0 * abs((float)i / FFTWindow - 0.5)); break;
+	default:						break;
+	}
+}
+
