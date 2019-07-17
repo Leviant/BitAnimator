@@ -4,7 +4,7 @@
 // Discord: Leviant#8796
 // PayPal: https://paypal.me/LeviantTech
 // License: http://opensource.org/licenses/MIT
-// Version: 1.0 (14.07.2019)
+// Version: 1.0 (17.07.2019)
 
 #pragma enable_d3d11_debug_symbols
 #pragma kernel CopyBuffer
@@ -329,7 +329,7 @@ void FrequencySmooth(int3 id : SV_DispatchThreadID)
 		float len = x * x;
 		result += Input[clamp(i + j, begin, last)] * exp(-len / len_correction);
 	}
-	Output[i] = result / correction;
+	Output[id.x] = result / correction;
 }
 
 [numthreads(64, 1, 1)]

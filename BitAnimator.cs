@@ -122,7 +122,7 @@ namespace AudioVisualization
             //core.RenderHistogram(core.texture, animationTime, multiply, 0, audioClip.frequency / 2, ampSmoothness, freqSmoothness);
             //core.RenderSpectrum(core.texture, animationTime, 4.0f, multiply, 1000, audioClip.frequency / 2, ampSmoothness, freqSmoothness);
             //core.RenderPeaks(core.texture, animationTime, 3.0f, multiply*60, 57, 149, 0, 0, 0.0f);
-            if (core == null || core.audioClip != audioClip)
+            /*if (core == null || core.audioClip != audioClip)
             {
                 FFTWindow = 1 << FFTWindowLog;
                 if (core == null)
@@ -225,7 +225,7 @@ namespace AudioVisualization
             for (int p = 0; p < recordSlots.Count; p++)
             {
                 tasks[p].Release();
-            }
+            }*/
         }
         void OnDestroy()
         {

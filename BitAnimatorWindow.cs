@@ -4,7 +4,7 @@
 // Discord: Leviant#8796
 // PayPal: https://paypal.me/LeviantTech
 // License: http://opensource.org/licenses/MIT
-// Version: 1.0 (14.07.2019)
+// Version: 1.0 (17.07.2019)
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -32,11 +32,11 @@ public class BitAnimatorWindow : EditorWindow
     bool openSettings = true;
     Vector2 pos, mouseDown, scroll;
     float scale = 3.0f;
-    float multiply = 0.7f;
-    float autoMultiply = 10000.0f;
+    float multiply = 1.0f;
+    float autoMultiply = 1.0f;
     float smoothFrequency = 0.0f;
     float time;
-    float autoNormilizeSpeed = 3.0f;
+    float autoNormilizeSpeed = 10.0f;
     float rms, median, maximum;
     int BPM = 0;
     int selectedBitAnimator = -1;
@@ -47,6 +47,7 @@ public class BitAnimatorWindow : EditorWindow
     public static Animation animation;
     public static AudioSource audio;
     public static bool isRunningTask;
+    public static bool resetInNextFrame;
     public int targetID;
     
 
@@ -146,7 +147,7 @@ public class BitAnimatorWindow : EditorWindow
                 multiply = Mathf.Pow(10.0f, EditorGUILayout.Slider("Multiply Log", Mathf.Log10(multiply), -5, 5));
                 EditorGUILayout.LabelField(String.Format("Multiply = {0:F6}, AutoMultiply = {1:F6}, RMS = {2:F6}, Max = {3:F6}, Median = {4:F6}", multiply, autoMultiply, rms, maximum, median));
                 if ((mode & ComputeProgram.VisualizationMode.RuntimeNormalize) != 0)
-                    autoNormilizeSpeed = EditorGUILayout.Slider("AutoNormilize Speed", autoNormilizeSpeed, 0, 10);
+                    autoNormilizeSpeed = EditorGUILayout.Slider("AutoNormilize Speed", autoNormilizeSpeed, 0, 50);
                 smoothFrequency = EditorGUILayout.Slider("FrequencySmooth", smoothFrequency, 0, 1);
                 using (new EditorGUI.DisabledScope(audio == null || animation == null))
                 {
@@ -469,25 +470,30 @@ public class BitAnimatorWindow : EditorWindow
                 }
                 if (viewValues != null)
                 {
-                    maximum = target.core.GetMax(viewValues, target.core.spectrumChunks);
-                    rms = target.core.GetRMS(viewValues, target.core.spectrumChunks, 0);
-                    rms = rms > 0.00001f ? rms : 0.00001f;
                     float[] values = new float[target.core.spectrumChunks];
                     viewValues.GetData(values);
                     Array.Sort(values);
                     median = values[target.core.spectrumChunks / 2];
-                    if ((mode & ComputeProgram.VisualizationMode.RuntimeNormalize) != 0)
+                    maximum = Math.Max(0.00001f, values[target.core.spectrumChunks - 1]);
+                    rms = target.core.GetRMS(values);
+                    if(resetInNextFrame)
                     {
-                        /*maximum /= multiply;
-                        median /= multiply;
-                        rms /= multiply;*/
-                        
-                        if (audio.isPlaying)
+                        if (float.IsInfinity(multiply) || float.IsNaN(multiply))
+                            multiply = 1.0f;
+                        if (float.IsInfinity(autoMultiply) || float.IsNaN(autoMultiply))
+                            autoMultiply = 1.0f;
+                        if (float.IsInfinity(maximum) || float.IsNaN(maximum))
+                            maximum = 1.0f;
+                        autoMultiply = 0.95f / (maximum / autoMultiply / multiply);
+                        resetInNextFrame = false;
+                    }
+                    if (audio.isPlaying && (mode & ComputeProgram.VisualizationMode.RuntimeNormalize) != 0)
+                    {
+                        float delta = 0.95f / (maximum / autoMultiply / multiply) - autoMultiply;
+                        if (delta < 0)
                         {
                             float k = 1.0f - Mathf.Exp(-Time.deltaTime * autoNormilizeSpeed);
-                            float delta = 1.0f / (rms / multiply) - autoMultiply;
-                            if (delta < 0)
-                                autoMultiply += k * delta;
+                            autoMultiply += k * delta;
                         }
                     }
                 }
@@ -495,9 +501,9 @@ public class BitAnimatorWindow : EditorWindow
             }
         }
     }
-    public void ResetView()
+    public static void ResetView()
     {
-        autoMultiply = 1.0f / rms;
+        resetInNextFrame = true;
     }
     static void PlayModeStateChanged(PlayModeStateChange state)
     {
@@ -526,7 +532,9 @@ public class BitAnimatorWindow : EditorWindow
     {
         Animator animator = bitAnimator.animatorObject;
         //animator.runtimeAnimatorController = UnityEditor.Animations.AnimatorController.CreateAnimatorControllerAtPathWithClip(Path.ChangeExtension(bitAnimator.animationAssetPath, "controller"), clip);
-        animation = animator.gameObject.GetOrAddComponent<Animation>();
+        animation = animator.gameObject.GetComponent<Animation>();
+        if(animation == null)
+            animation = animator.gameObject.AddComponent<Animation>();
         animation.playAutomatically = false;
         AnimationState runtimeAnimation = animation["BitAnimator.RuntimeAnimation"];
         if (runtimeAnimation == null)

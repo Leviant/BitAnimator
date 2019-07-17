@@ -4,7 +4,7 @@
 // Discord: Leviant#8796
 // PayPal: https://paypal.me/LeviantTech
 // License: http://opensource.org/licenses/MIT
-// Version: 1.0 (14.07.2019)
+// Version: 1.0 (17.07.2019)
 
 #if UNITY_EDITOR
 using System;
@@ -669,6 +669,7 @@ public class BitAnimatorEditor : Editor
         SerializedProperty channelMask = serializedProp.FindPropertyRelative("channelMask");
         SerializedProperty accumulate = serializedProp.FindPropertyRelative("accumulate");
         SerializedProperty loops = serializedProp.FindPropertyRelative("loops");
+        SerializedProperty modificators = serializedProp.FindPropertyRelative("modificators");
         if (name.stringValue != slot.name)
         {
             type.intValue = (int)slot.type;
@@ -693,6 +694,7 @@ public class BitAnimatorEditor : Editor
             channelMask.intValue = slot.channelMask;
             accumulate.boolValue = slot.accumulate;
             loops.intValue = slot.loops;
+            modificators.ClearArray();
             //  TODO: gradient not serialized 
             /*colors.objectReferenceValue = new Gradient(); 
 
@@ -749,6 +751,7 @@ public class BitAnimatorEditor : Editor
             {
                 BitAnimatorWindow.target = bitAnimator;
                 BitAnimatorWindow.selectedSlot = i;
+                BitAnimatorWindow.ResetView();
             }
             int current = -1;
             for (int b = 0; b < availableVariables.Count; ++b)
@@ -949,7 +952,10 @@ public class BitAnimatorEditor : Editor
             EditorGUILayout.EndVertical();
         }
         if (EditorGUI.EndChangeCheck())
+        {
             updateAnimation = true;
+            BitAnimatorWindow.ResetView();
+        }
         GUI.backgroundColor = oldBackground;
     }
 }

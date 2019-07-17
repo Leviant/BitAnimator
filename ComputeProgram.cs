@@ -4,7 +4,7 @@
 // Discord: Leviant#8796
 // PayPal: https://paypal.me/LeviantTech
 // License: http://opensource.org/licenses/MIT
-// Version: 1.0 (14.07.2019)
+// Version: 1.0 (17.07.2019)
 
 #if UNITY_EDITOR
 using System;
@@ -595,7 +595,7 @@ namespace AudioVisualization
                     computeShader.DispatchGrid(FrequencySmooth, RealWindow);
                     Swap(ref input, ref result);
                 }
-                float rms = 1.0f;
+                /*float rms = 1.0f;
                 if ((mode & VisualizationMode.RuntimeNormalize) != 0)
                 {
                     if ((mode & VisualizationMode.LogFrequency) != 0)
@@ -611,7 +611,8 @@ namespace AudioVisualization
                         float hzPerBin = (float)audioClip.frequency / FFTWindow;
                         rms = GetRMS(input, Mathf.FloorToInt((endFrequencyBand - startFrequencyBand) / hzPerBin) + 1, Mathf.FloorToInt(startFrequencyBand / hzPerBin));
                     }
-                }
+                }*/
+                Multiply(input, 0, RealWindow, scale);
 
                 computeShader.SetBuffer(DrawHistogram.ID, cs_Input, input);
                 computeShader.SetTexture(DrawHistogram.ID, cs_RenderTexture, texture);
@@ -620,7 +621,7 @@ namespace AudioVisualization
                 computeShader.SetFloat(cs_MinimumValues, startFrequencyBand);
                 computeShader.SetFloat(cs_MaximumValues, endFrequencyBand);
                 computeShader.SetFloat(cs_Time, samplesOffset);
-                computeShader.SetFloat(cs_Scale, scale);
+                computeShader.SetFloat(cs_Scale, 1.0f);
                 computeShader.SetInt(cs_N, (int)mode);
                 computeShader.DispatchGrid(DrawHistogram, texture.width, texture.height);
                 return input;
@@ -855,12 +856,13 @@ namespace AudioVisualization
                 computeShader.DispatchGrid(SpectrumLinearToLog, RealWindow, peaks);
                 Swap(ref input, ref result);
             }
+            Multiply(input, 0, RealWindow * peaks, multiply);
 
             computeShader.SetTexture(RenderSpectrumKernel.ID, cs_RenderTexture, texture);
             computeShader.SetBuffer(RenderSpectrumKernel.ID, cs_Input, input);
             computeShader.SetInts(cs_GridOffset, new int[] { 0, offset, 0 });
             computeShader.SetInts(cs_GridSize, new int[] { texture.width, texture.height, peaks });
-            computeShader.SetFloat(cs_Scale, multiply);
+            computeShader.SetFloat(cs_Scale, 1.0f);
             computeShader.SetFloat(cs_MinimumValues, start);
             computeShader.SetFloat(cs_MaximumValues, end);
             computeShader.SetFloat(cs_Time, time);
