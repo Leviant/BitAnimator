@@ -595,7 +595,7 @@ namespace AudioVisualization
                 float[] scaledSpectrumChunk = DSP.Math.Multiply(sampleChunk, windowCoefs);
 
                 // Perform the FFT and convert output (complex numbers) to Magnitude
-                System.Numerics.Complex[] fftSpectrum = fft.Execute(scaledSpectrumChunk);
+                ComplexFloat[] fftSpectrum = fft.Execute(scaledSpectrumChunk);
                 float[] scaledFFTSpectrum = DSP.ConvertComplex.ToMagnitude(fftSpectrum);
                 scaledFFTSpectrum = DSP.Math.Multiply(scaledFFTSpectrum, scaleFactor);
 

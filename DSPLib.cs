@@ -143,7 +143,7 @@ namespace DSPLib
         /// </summary>
         /// <param name="timeSeries"></param>
         /// <returns>Complex[] FFT Result</returns>
-        public Complex[] Execute(float[] timeSeries)
+        public ComplexFloat[] Execute(float[] timeSeries)
         {
 			UnityEngine.Debug.Assert(timeSeries.Length <= mLengthTotal, "The input timeSeries length was greater than the total number of points that was initialized. DFT.Exectue()");
 
@@ -151,7 +151,7 @@ namespace DSPLib
             float[] totalInputData = new float[mLengthTotal];
             Array.Copy(timeSeries, totalInputData, timeSeries.Length);
 
-            Complex[] output;
+            ComplexFloat[] output;
             if (mOutOfMemory)
                 output = Dft(totalInputData);
             else
@@ -167,13 +167,13 @@ namespace DSPLib
         /// </summary>
         /// <param name="timeSeries"></param>
         /// <returns>Complex[] result</returns>
-        private Complex[] Dft(float[] timeSeries)
+        private ComplexFloat[] Dft(float[] timeSeries)
         {
             UInt32 n = mLengthTotal;
             UInt32 m = mLengthHalf;
             float[] re = new float[m];
             float[] im = new float[m];
-            Complex[] result = new Complex[m];
+            ComplexFloat[] result = new ComplexFloat[m];
             float sf = 2.0f * Mathf.PI / n;
 
             //Parallel.For(0, m, (j) =>
@@ -186,12 +186,12 @@ namespace DSPLib
                     im[j] -= timeSeries[k] * Mathf.Sin(a * k) * mDFTScale;
                 }
 
-                result[j] = new Complex(re[j], im[j]);
+                result[j] = new ComplexFloat(re[j], im[j]);
             }
 
             // DC and Fs/2 Points are scaled differently, since they have only a real part
-            result[0] = new Complex(result[0].Real / Mathf.Sqrt(2.0f), 0.0f);
-            result[mLengthHalf - 1] = new Complex(result[mLengthHalf - 1].Real / Mathf.Sqrt(2.0f), 0.0f);
+            result[0] = new ComplexFloat(result[0].Real / Mathf.Sqrt(2.0f), 0.0f);
+            result[mLengthHalf - 1] = new ComplexFloat(result[mLengthHalf - 1].Real / Mathf.Sqrt(2.0f), 0.0f);
 
             return result;
         }
@@ -203,13 +203,13 @@ namespace DSPLib
         /// </summary>
         /// <param name="timeSeries"></param>
         /// <returns>Complex[] result</returns>
-        private Complex[] DftCached(float[] timeSeries)
+        private ComplexFloat[] DftCached(float[] timeSeries)
         {
             UInt32 n = mLengthTotal;
             UInt32 m = mLengthHalf;
             float[] re = new float[m];
             float[] im = new float[m];
-            Complex[] result = new Complex[m];
+            ComplexFloat[] result = new ComplexFloat[m];
 
             //Parallel.For(0, m, (j) =>
             for (UInt32 j = 0; j < m; j++)
@@ -219,12 +219,12 @@ namespace DSPLib
                     re[j] += timeSeries[k] * mCosTerm[j, k];
                     im[j] -= timeSeries[k] * mSinTerm[j, k];
                 }
-                result[j] = new Complex(re[j], im[j]);
+                result[j] = new ComplexFloat(re[j], im[j]);
             }
 
             // DC and Fs/2 Points are scaled differently, since they have only a real part
-            result[0] = new Complex(result[0].Real / Mathf.Sqrt(2.0f), 0.0f);
-            result[mLengthHalf - 1] = new Complex(result[mLengthHalf - 1].Real / Mathf.Sqrt(2.0f), 0.0f);
+            result[0] = new ComplexFloat(result[0].Real / Mathf.Sqrt(2.0f), 0.0f);
+            result[mLengthHalf - 1] = new ComplexFloat(result[mLengthHalf - 1].Real / Mathf.Sqrt(2.0f), 0.0f);
 
             return result;
         }
@@ -382,7 +382,7 @@ namespace DSPLib
         /// </summary>
         /// <param name="timeSeries"></param>
         /// <returns>Complex[] Spectrum</returns>
-        public Complex[] Execute(float[] timeSeries)
+        public ComplexFloat[] Execute(float[] timeSeries)
         {
             UInt32 numFlies = mLengthTotal >> 1;  // Number of butterflies per sub-FFT
             UInt32 span = mLengthTotal >> 1;      // Width of the butterfly
@@ -479,22 +479,22 @@ namespace DSPLib
             // linked list elements to a complex output vector & properly apply scale factors.
 
             x = mX[0];
-            Complex[] unswizzle = new Complex[mLengthTotal];
+            ComplexFloat[] unswizzle = new ComplexFloat[mLengthTotal];
             while (x != null)
             {
                 UInt32 target = x.revTgt;
-                unswizzle[target] = new Complex(x.re * mFFTScale, x.im * mFFTScale);
+                unswizzle[target] = new ComplexFloat(x.re * mFFTScale, x.im * mFFTScale);
                 x = x.next;
             }
 
             // Return 1/2 the FFT result from DC to Fs/2 (The real part of the spectrum)
             //UInt32 halfLength = ((mN + mZp) / 2) + 1;
-            Complex[] result = new Complex[mLengthHalf];
+            ComplexFloat[] result = new ComplexFloat[mLengthHalf];
             Array.Copy(unswizzle, result, mLengthHalf);
 
             // DC and Fs/2 Points are scaled differently, since they have only a real part
-            result[0] = new Complex(result[0].Real / Mathf.Sqrt(2), 0.0f);
-            result[mLengthHalf - 1] = new Complex(result[mLengthHalf - 1].Real / Mathf.Sqrt(2), 0.0f);
+            result[0] = new ComplexFloat(result[0].Real / Mathf.Sqrt(2), 0.0f);
+            result[mLengthHalf - 1] = new ComplexFloat(result[mLengthHalf - 1].Real / Mathf.Sqrt(2), 0.0f);
 
             return result;
         }
@@ -1266,7 +1266,7 @@ namespace DSPLib
             /// </summary>
             /// <param name="rawFFT"></param>
             /// <returns>float[] MagSquared Format</returns>
-            public static float[] ToMagnitudeSquared(Complex[] rawFFT)
+            public static float[] ToMagnitudeSquared(ComplexFloat[] rawFFT)
             {
                 UInt32 np = (UInt32)rawFFT.Length;
                 float[] magSquared = new float[np];
@@ -1285,7 +1285,7 @@ namespace DSPLib
             /// </summary>
             /// <param name="rawFFT"></param>
             /// <returns>float[] Magnitude Format (Vrms)</returns>
-            public static float[] ToMagnitude(Complex[] rawFFT)
+            public static float[] ToMagnitude(ComplexFloat[] rawFFT)
             {
                 UInt32 np = (UInt32)rawFFT.Length;
                 float[] mag = new float[np];
@@ -1303,7 +1303,7 @@ namespace DSPLib
             /// </summary>
             /// <param name="rawFFT"> Complex[] input array"></param>
             /// <returns>float[] Magnitude Format (dBV)</returns>
-            public static float[] ToMagnitudeDBV(Complex[] rawFFT)
+            public static float[] ToMagnitudeDBV(ComplexFloat[] rawFFT)
             {
                 UInt32 np = (UInt32)rawFFT.Length;
                 float[] mag = new float[np];
@@ -1326,7 +1326,7 @@ namespace DSPLib
             /// </summary>
             /// <param name="rawFFT"> Complex[] input array"></param>
             /// <returns>float[] Phase (Degrees)</returns>
-            public static float[] ToPhaseDegrees(Complex[] rawFFT)
+            public static float[] ToPhaseDegrees(ComplexFloat[] rawFFT)
             {
                 float sf = 180.0f / Mathf.PI; // Degrees per Radian scale factor
 
@@ -1346,7 +1346,7 @@ namespace DSPLib
             /// </summary>
             /// <param name="rawFFT"> Complex[] input array"></param>
             /// <returns>float[] Phase (Degrees)</returns>
-            public static float[] ToPhaseRadians(Complex[] rawFFT)
+            public static float[] ToPhaseRadians(ComplexFloat[] rawFFT)
             {
                 UInt32 np = (UInt32)rawFFT.Length;
                 float[] phase = new float[np];

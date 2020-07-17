@@ -22,12 +22,12 @@ using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
 using UnityEngine;
 
-namespace System.Numerics {
-
+namespace DSPLib
+{ 
 #if !SILVERLIGHT
     [Serializable]
 #endif // !SILVERLIGHT
-    public struct Complex : IEquatable<Complex>, IFormattable {
+    public struct ComplexFloat : IEquatable<ComplexFloat>, IFormattable {
 
         // --------------SECTION: Private Data members ----------- //
 
@@ -55,7 +55,7 @@ namespace System.Numerics {
 
         public float Magnitude {
             get {
-                return Complex.Abs(this);
+                return ComplexFloat.Abs(this);
             }
         }
 
@@ -67,68 +67,68 @@ namespace System.Numerics {
 
         // --------------SECTION: Attributes -------------- //
 
-        public static readonly Complex Zero = new Complex(0.0f, 0.0f);
-        public static readonly Complex One = new Complex(1.0f, 0.0f);
-        public static readonly Complex ImaginaryOne = new Complex(0.0f, 1.0f);
+        public static readonly ComplexFloat Zero = new ComplexFloat(0.0f, 0.0f);
+        public static readonly ComplexFloat One = new ComplexFloat(1.0f, 0.0f);
+        public static readonly ComplexFloat ImaginaryOne = new ComplexFloat(0.0f, 1.0f);
 
         // --------------SECTION: Constructors and factory methods -------------- //
 
-        public Complex(float real, float imaginary)  /* Constructor to create a complex number with rectangular co-ordinates  */
+        public ComplexFloat(float real, float imaginary)  /* Constructor to create a complex number with rectangular co-ordinates  */
         {
             this.m_real = real;
             this.m_imaginary = imaginary;
         }
 
-        public static Complex FromPolarCoordinates(float magnitude, float phase) /* Factory method to take polar inputs and create a Complex object */
+        public static ComplexFloat FromPolarCoordinates(float magnitude, float phase) /* Factory method to take polar inputs and create a Complex object */
         {
-            return new Complex((magnitude * Mathf.Cos(phase)), (magnitude * Mathf.Sin(phase)));
+            return new ComplexFloat((magnitude * Mathf.Cos(phase)), (magnitude * Mathf.Sin(phase)));
         }
 
-        public static Complex Negate(Complex value) {
+        public static ComplexFloat Negate(ComplexFloat value) {
             return -value;
         }
 
-        public static Complex Add(Complex left, Complex right) {
+        public static ComplexFloat Add(ComplexFloat left, ComplexFloat right) {
             return left + right;
         }
 
-        public static Complex Subtract(Complex left, Complex right) {
+        public static ComplexFloat Subtract(ComplexFloat left, ComplexFloat right) {
             return left - right;
         }
 
-        public static Complex Multiply(Complex left, Complex right) {
+        public static ComplexFloat Multiply(ComplexFloat left, ComplexFloat right) {
             return left * right;
         }
 
-        public static Complex Divide(Complex dividend, Complex divisor) {
+        public static ComplexFloat Divide(ComplexFloat dividend, ComplexFloat divisor) {
             return dividend / divisor;
         }
 
         // --------------SECTION: Arithmetic Operator(unary) Overloading -------------- //
-        public static Complex operator -(Complex value)  /* Unary negation of a complex number */
+        public static ComplexFloat operator -(ComplexFloat value)  /* Unary negation of a complex number */
         {
 
-            return (new Complex((-value.m_real), (-value.m_imaginary)));
+            return (new ComplexFloat((-value.m_real), (-value.m_imaginary)));
         }
 
         // --------------SECTION: Arithmetic Operator(binary) Overloading -------------- //       
-        public static Complex operator +(Complex left, Complex right) {
-            return (new Complex((left.m_real + right.m_real), (left.m_imaginary + right.m_imaginary)));
+        public static ComplexFloat operator +(ComplexFloat left, ComplexFloat right) {
+            return (new ComplexFloat((left.m_real + right.m_real), (left.m_imaginary + right.m_imaginary)));
 
         }
 
-        public static Complex operator -(Complex left, Complex right) {
-            return (new Complex((left.m_real - right.m_real), (left.m_imaginary - right.m_imaginary)));
+        public static ComplexFloat operator -(ComplexFloat left, ComplexFloat right) {
+            return (new ComplexFloat((left.m_real - right.m_real), (left.m_imaginary - right.m_imaginary)));
         }
 
-        public static Complex operator *(Complex left, Complex right) {
+        public static ComplexFloat operator *(ComplexFloat left, ComplexFloat right) {
             // Multiplication:  (a + bi)(c + di) = (ac -bd) + (bc + ad)i
             float result_Realpart = (left.m_real * right.m_real) - (left.m_imaginary * right.m_imaginary);
             float result_Imaginarypart = (left.m_imaginary * right.m_real) + (left.m_real * right.m_imaginary);
-            return (new Complex(result_Realpart, result_Imaginarypart));
+            return (new ComplexFloat(result_Realpart, result_Imaginarypart));
         }
 
-        public static Complex operator /(Complex left, Complex right) {
+        public static ComplexFloat operator /(ComplexFloat left, ComplexFloat right) {
             // Division : Smith's formula.
             float a = left.m_real;
             float b = left.m_imaginary;
@@ -137,17 +137,17 @@ namespace System.Numerics {
 
             if (Mathf.Abs(d) < Mathf.Abs(c)) {
                 float doc = d / c;
-                return new Complex((a + b * doc) / (c + d * doc), (b - a * doc) / (c + d * doc));
+                return new ComplexFloat((a + b * doc) / (c + d * doc), (b - a * doc) / (c + d * doc));
             } else {
                 float cod = c / d;
-                return new Complex((b + a * cod) / (d + c * cod), (-a + b * cod) / (d + c * cod));
+                return new ComplexFloat((b + a * cod) / (d + c * cod), (-a + b * cod) / (d + c * cod));
             }
         }
 
 
         // --------------SECTION: Other arithmetic operations  -------------- //
 
-        public static float Abs(Complex value) {
+        public static float Abs(ComplexFloat value) {
 
             if(float.IsInfinity(value.m_real) || float.IsInfinity(value.m_imaginary)) {
                 return float.PositiveInfinity;
@@ -171,29 +171,29 @@ namespace System.Numerics {
                 return d * Mathf.Sqrt(1.0f + r * r);
             }
         }
-        public static Complex Conjugate(Complex value) {
+        public static ComplexFloat Conjugate(ComplexFloat value) {
             // Conjugate of a Complex number: the conjugate of x+i*y is x-i*y 
 
-            return (new Complex(value.m_real, (-value.m_imaginary)));
+            return (new ComplexFloat(value.m_real, (-value.m_imaginary)));
 
         }
-        public static Complex Reciprocal(Complex value) {
+        public static ComplexFloat Reciprocal(ComplexFloat value) {
             // Reciprocal of a Complex number : the reciprocal of x+i*y is 1/(x+i*y)
             if ((value.m_real == 0) && (value.m_imaginary == 0)) {
-                return Complex.Zero;
+                return ComplexFloat.Zero;
             }
 
-            return Complex.One / value;
+            return ComplexFloat.One / value;
         }
 
         // --------------SECTION: Comparison Operator(binary) Overloading -------------- //
 
-        public static bool operator ==(Complex left, Complex right) {
+        public static bool operator ==(ComplexFloat left, ComplexFloat right) {
             return ((left.m_real == right.m_real) && (left.m_imaginary == right.m_imaginary));
 
 
         }
-        public static bool operator !=(Complex left, Complex right) {
+        public static bool operator !=(ComplexFloat left, ComplexFloat right) {
             return ((left.m_real != right.m_real) || (left.m_imaginary != right.m_imaginary));
 
         }
@@ -201,52 +201,52 @@ namespace System.Numerics {
         // --------------SECTION: Comparison operations (methods implementing IEquatable<ComplexNumber>,IComparable<ComplexNumber>) -------------- //
 
         public override bool Equals(object obj) {
-            if (!(obj is Complex)) return false;
-            return this == ((Complex)obj);
+            if (!(obj is ComplexFloat)) return false;
+            return this == ((ComplexFloat)obj);
         }
-        public bool Equals(Complex value) {
+        public bool Equals(ComplexFloat value) {
             return ((this.m_real.Equals(value.m_real)) && (this.m_imaginary.Equals(value.m_imaginary)));
 
         }
 
         // --------------SECTION: Type-casting basic numeric data-types to ComplexNumber  -------------- //
 
-        public static implicit operator Complex(Int16 value) {
-            return (new Complex(value, 0));
+        public static implicit operator ComplexFloat(Int16 value) {
+            return (new ComplexFloat(value, 0));
         }
-        public static implicit operator Complex(Int32 value) {
-            return (new Complex(value, 0));
+        public static implicit operator ComplexFloat(Int32 value) {
+            return (new ComplexFloat(value, 0));
         }
-        public static implicit operator Complex(Int64 value) {
-            return (new Complex(value, 0));
-        }
-        //[CLSCompliant(false)]
-        public static implicit operator Complex(UInt16 value) {
-            return (new Complex(value, 0));
+        public static implicit operator ComplexFloat(Int64 value) {
+            return (new ComplexFloat(value, 0));
         }
         //[CLSCompliant(false)]
-        public static implicit operator Complex(UInt32 value) {
-            return (new Complex(value, 0));
+        public static implicit operator ComplexFloat(UInt16 value) {
+            return (new ComplexFloat(value, 0));
         }
         //[CLSCompliant(false)]
-        public static implicit operator Complex(UInt64 value) {
-            return (new Complex(value, 0));
+        public static implicit operator ComplexFloat(UInt32 value) {
+            return (new ComplexFloat(value, 0));
         }
         //[CLSCompliant(false)]
-        public static implicit operator Complex(SByte value) {
-            return (new Complex(value, 0));
+        public static implicit operator ComplexFloat(UInt64 value) {
+            return (new ComplexFloat(value, 0));
         }
-        public static implicit operator Complex(Byte value) {
-            return (new Complex(value, 0));
+        //[CLSCompliant(false)]
+        public static implicit operator ComplexFloat(SByte value) {
+            return (new ComplexFloat(value, 0));
         }
-        public static implicit operator Complex(Single value) {
-            return (new Complex(value, 0));
+        public static implicit operator ComplexFloat(Byte value) {
+            return (new ComplexFloat(value, 0));
+        }
+        public static implicit operator ComplexFloat(Single value) {
+            return (new ComplexFloat(value, 0));
         }
         /*public static implicit operator Complex(double value) {
             return (new Complex(value, 0));
         }*/
-        public static explicit operator Complex(Decimal value) {
-            return (new Complex((float)value, 0));
+        public static explicit operator ComplexFloat(Decimal value) {
+            return (new ComplexFloat((float)value, 0));
         }
 
 
@@ -281,99 +281,99 @@ namespace System.Numerics {
 
         // --------------SECTION: Trigonometric operations (methods implementing ITrigonometric)  -------------- //
 
-        public static Complex Sin(Complex value) {
+        public static ComplexFloat Sin(ComplexFloat value) {
             float a = value.m_real;
             float b = value.m_imaginary;
-			return new Complex(Mathf.Sin(a) * HyperbolicMath.Cosh(b), Mathf.Cos(a) * HyperbolicMath.Sinh(b));
+			return new ComplexFloat(Mathf.Sin(a) * HyperbolicMath.Cosh(b), Mathf.Cos(a) * HyperbolicMath.Sinh(b));
         }
 
         [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "Sinh", Justification = "Microsoft: Existing Name")]
-        public static Complex Sinh(Complex value) /* Hyperbolic sin */
+        public static ComplexFloat Sinh(ComplexFloat value) /* Hyperbolic sin */
         {
             float a = value.m_real;
             float b = value.m_imaginary;
-			return new Complex(HyperbolicMath.Sinh(a) * Mathf.Cos(b), HyperbolicMath.Cosh(a) * Mathf.Sin(b));
+			return new ComplexFloat(HyperbolicMath.Sinh(a) * Mathf.Cos(b), HyperbolicMath.Cosh(a) * Mathf.Sin(b));
 
         }
-        public static Complex Asin(Complex value) /* Arcsin */
+        public static ComplexFloat Asin(ComplexFloat value) /* Arcsin */
         {
             return (-ImaginaryOne) * Log(ImaginaryOne * value + Sqrt(One - value * value));
         }
 
-        public static Complex Cos(Complex value) {
+        public static ComplexFloat Cos(ComplexFloat value) {
             float a = value.m_real;
 			float b = value.m_imaginary;
-			return new Complex(Mathf.Cos(a) * HyperbolicMath.Cosh(b), - (Mathf.Sin(a) * HyperbolicMath.Sinh(b)));
+			return new ComplexFloat(Mathf.Cos(a) * HyperbolicMath.Cosh(b), - (Mathf.Sin(a) * HyperbolicMath.Sinh(b)));
         }
 
         [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "Cosh", Justification = "Microsoft: Existing Name")]
-        public static Complex Cosh(Complex value) /* Hyperbolic cos */
+        public static ComplexFloat Cosh(ComplexFloat value) /* Hyperbolic cos */
         {
             float a = value.m_real;
             float b = value.m_imaginary;
-			return new Complex(HyperbolicMath.Cosh(a) * Mathf.Cos(b), HyperbolicMath.Sinh(a) * Mathf.Sin(b));
+			return new ComplexFloat(HyperbolicMath.Cosh(a) * Mathf.Cos(b), HyperbolicMath.Sinh(a) * Mathf.Sin(b));
         }
-        public static Complex Acos(Complex value) /* Arccos */
+        public static ComplexFloat Acos(ComplexFloat value) /* Arccos */
         {
             return (-ImaginaryOne) * Log(value + ImaginaryOne*Sqrt(One - (value * value)));
 
         }
-        public static Complex Tan(Complex value) {
+        public static ComplexFloat Tan(ComplexFloat value) {
             return (Sin(value) / Cos(value));
         }
 
         [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "Tanh", Justification = "Microsoft: Existing Name")]
-        public static Complex Tanh(Complex value) /* Hyperbolic tan */
+        public static ComplexFloat Tanh(ComplexFloat value) /* Hyperbolic tan */
         {
             return (Sinh(value) / Cosh(value));
         }
-        public static Complex Atan(Complex value) /* Arctan */
+        public static ComplexFloat Atan(ComplexFloat value) /* Arctan */
         {
-            Complex Two = new Complex(2.0f, 0.0f);
+            ComplexFloat Two = new ComplexFloat(2.0f, 0.0f);
             return (ImaginaryOne / Two) * (Log(One - ImaginaryOne * value) - Log(One + ImaginaryOne * value));
         }
 
         // --------------SECTION: Other numerical functions  -------------- //        
 
-        public static Complex Log(Complex value) /* Log of the complex number value to the base of 'e' */
+        public static ComplexFloat Log(ComplexFloat value) /* Log of the complex number value to the base of 'e' */
         {
-            return (new Complex((Mathf.Log(Abs(value))), (Mathf.Atan2(value.m_imaginary, value.m_real))));
+            return (new ComplexFloat((Mathf.Log(Abs(value))), (Mathf.Atan2(value.m_imaginary, value.m_real))));
 
         }
-        public static Complex Log(Complex value, float baseValue) /* Log of the complex number to a the base of a float */
+        public static ComplexFloat Log(ComplexFloat value, float baseValue) /* Log of the complex number to a the base of a float */
         {
             return (Log(value) / Log(baseValue));
         }
-        public static Complex Log10(Complex value) /* Log to the base of 10 of the complex number */
+        public static ComplexFloat Log10(ComplexFloat value) /* Log to the base of 10 of the complex number */
         {
 
-            Complex temp_log = Log(value);
+            ComplexFloat temp_log = Log(value);
             return (Scale(temp_log, (float)LOG_10_INV));
 
         }
-        public static Complex Exp(Complex value) /* The complex number raised to e */
+        public static ComplexFloat Exp(ComplexFloat value) /* The complex number raised to e */
         {
             float temp_factor = Mathf.Exp(value.m_real);
             float result_re = temp_factor * Mathf.Cos(value.m_imaginary);
             float result_im = temp_factor * Mathf.Sin(value.m_imaginary);
-            return (new Complex(result_re, result_im));
+            return (new ComplexFloat(result_re, result_im));
         }
 
         [SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly", MessageId = "Sqrt", Justification = "Microsoft: Existing Name")]
-        public static Complex Sqrt(Complex value) /* Square root ot the complex number */
+        public static ComplexFloat Sqrt(ComplexFloat value) /* Square root ot the complex number */
         {
-            return Complex.FromPolarCoordinates(Mathf.Sqrt(value.Magnitude), value.Phase / 2.0f);
+            return ComplexFloat.FromPolarCoordinates(Mathf.Sqrt(value.Magnitude), value.Phase / 2.0f);
         }
 
-        public static Complex Pow(Complex value, Complex power) /* A complex number raised to another complex number */
+        public static ComplexFloat Pow(ComplexFloat value, ComplexFloat power) /* A complex number raised to another complex number */
         {
 
-            if (power == Complex.Zero) {
-                return Complex.One;
+            if (power == ComplexFloat.Zero) {
+                return ComplexFloat.One;
             }
 
-            if (value == Complex.Zero) {
-                return Complex.Zero;
+            if (value == ComplexFloat.Zero) {
+                return ComplexFloat.Zero;
             }
 
             float a = value.m_real;
@@ -381,29 +381,29 @@ namespace System.Numerics {
             float c = power.m_real;
             float d = power.m_imaginary;
 
-            float rho = Complex.Abs(value);
+            float rho = ComplexFloat.Abs(value);
             float theta = Mathf.Atan2(b, a);
             float newRho = c * theta + d * Mathf.Log(rho);
 
 			float t = Mathf.Pow(rho, c) * Mathf.Pow((float)Math.E, -d * theta);
 
-            return new Complex(t * Mathf.Cos(newRho), t * Mathf.Sin(newRho));
+            return new ComplexFloat(t * Mathf.Cos(newRho), t * Mathf.Sin(newRho));
         }
 
-        public static Complex Pow(Complex value, float power) // A complex number raised to a real number 
+        public static ComplexFloat Pow(ComplexFloat value, float power) // A complex number raised to a real number 
         {
-            return Pow(value, new Complex(power, 0));
+            return Pow(value, new ComplexFloat(power, 0));
         }
 
 
 
         //--------------- SECTION: Private member functions for internal use -----------------------------------//
 
-        private static Complex Scale(Complex value, float factor) {
+        private static ComplexFloat Scale(ComplexFloat value, float factor) {
 
             float result_re = factor * value.m_real;
             float result_im = factor * value.m_imaginary;
-            return (new Complex(result_re, result_im));
+            return (new ComplexFloat(result_re, result_im));
         }
 
     }
