@@ -1399,7 +1399,7 @@ namespace AudioVisualization
                 keyframes = null;
                 return;
             }
-            keyframes = new ComputeBuffer(curve.length, 20);
+            keyframes = new ComputeBuffer(curve.length, 32);
             keyframes.SetData(curve.keys);
         }
         public void ApplyRemap(ComputeBuffer input, ComputeBuffer output, int count, ComputeBuffer remap)

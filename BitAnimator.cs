@@ -145,7 +145,7 @@ namespace AudioVisualization
                 tasks[p].values = new ComputeBuffer(chunks, 4);
                 tasks[p].buffer = new ComputeBuffer(chunks, 4);
                 //Резервируем буффер для ключей XYZW|RGBA
-                tasks[p].keyframes = new ComputeBuffer(chunks * tasks[p].Channels, 20);
+                tasks[p].keyframes = new ComputeBuffer(chunks * tasks[p].Channels, 32);
             }
 
             //разделяем вычисление спектра на блоки
@@ -377,7 +377,7 @@ namespace AudioVisualization
                 tasks[p].values = new ComputeBuffer(chunks, 4);
                 tasks[p].buffer = new ComputeBuffer(chunks, 4);
                 //Резервируем буффер для ключей XYZW|RGBA
-                tasks[p].keyframes = new ComputeBuffer(chunks * tasks[p].Channels, 20);
+                tasks[p].keyframes = new ComputeBuffer(chunks * tasks[p].Channels, 32);
             }
             status = "Calculating spectrum";
             if (updateCallback != null) updateCallback(this);
@@ -791,7 +791,7 @@ namespace AudioVisualization
             }
             public void SetRemapCurve(Vector4 min, Vector4 max, AnimationCurve curve, int mask)
             {
-                remapKeyframes = new ComputeBuffer(curve.length, 20);
+                remapKeyframes = new ComputeBuffer(curve.length, 32);
                 remapKeyframes.SetData(curve.keys);
                 this.min = min;
                 this.max = max;
@@ -818,7 +818,7 @@ namespace AudioVisualization
                     ks[offset + i].time = gradient.alphaKeys[i].time;
                     ks[offset + i].value = gradient.alphaKeys[i].alpha;
                 }
-                gradientKeyframes = new ComputeBuffer(ks.Length, 20);
+                gradientKeyframes = new ComputeBuffer(ks.Length, 32);
                 gradientKeyframes.SetData(ks);
                 min = Vector4.zero;
                 max = Vector4.one;
