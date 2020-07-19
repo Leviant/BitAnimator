@@ -238,6 +238,7 @@ public class BitAnimatorEditor : Editor
 			UpdateParticleProperties ();
 			UpdateShaderProperties ();
 			UpdateTransformProperties ();
+            UpdateAttributeProperties();
             availableProperties = availableVariables.Select(x => x.description).ToArray();
             updateList = false;
         }
@@ -502,7 +503,39 @@ public class BitAnimatorEditor : Editor
         }
 	}
 
-	public void UpdateBlendShapeProperties() 
+    public void UpdateAttributeProperties()
+    {
+        var d = new[]{
+            new { name = "Attribute/Enabled", propertyName = "m_Enabled", type = BitAnimator.RecordSlot.PropertyType.Range, rangeMin = 0.0f, rangeMax = 1.0f},
+        };
+
+        foreach (var transformVariable in d)
+        {
+            BitAnimator.RecordSlot prop = new BitAnimator.RecordSlot();
+            prop.type = transformVariable.type;
+            prop.typeSet = BitAnimator.RecordSlot.PropertiesSet.Attribute;
+            prop.name = transformVariable.name;
+            prop.property = GetPropertyString(prop.type, transformVariable.propertyName);
+            prop.description = transformVariable.name;
+            prop.startFreq = 0;
+            prop.endFreq = 50;
+            prop.rangeMin = transformVariable.rangeMin;
+            prop.rangeMax = transformVariable.rangeMax;
+            prop.remap = new AnimationCurve(
+                new Keyframe(0, 0), new Keyframe(0.49999f, 0),
+                new Keyframe(0.50001f, 1), new Keyframe(1, 1)
+                );
+            prop.ampSmoothness = 0.2f;
+            prop.damping = 0f;
+            prop.channelMask = 0xFF;
+            prop.accumulate = false;
+            prop.loops = 1;
+            availableVariables.Add(prop);
+            menu.AddItem(new GUIContent(prop.description), false, AddProperty, prop);
+        }
+    }
+
+    public void UpdateBlendShapeProperties() 
 	{
 		SkinnedMeshRenderer skinMeshObj = renderer as SkinnedMeshRenderer;
         if (skinMeshObj == null)
@@ -585,7 +618,7 @@ public class BitAnimatorEditor : Editor
             EditorGUI.BeginChangeCheck();
             idQuality = EditorGUILayout.Popup(new GUIContent("Animation quality", "0.0 - Maximum compression\n0.5 - normal quality\n1.0 - lossless"), idQuality, options);
             if (EditorGUI.EndChangeCheck())
-                quality.floatValue = idQuality;
+                quality.floatValue = qualityVariants[Math.Max(Math.Min(qualityVariants.Length, idQuality), 0)];
             string[] displayedPresets = presets.Select(p => p.name).ToArray();
             int selectedPreset = Array.IndexOf(displayedPresets, presetName.stringValue);
             EditorGUI.BeginChangeCheck();
@@ -845,7 +878,7 @@ public class BitAnimatorEditor : Editor
 					EditorGUILayout.PropertyField (colors);
 					break;
 				case BitAnimator.RecordSlot.PropertyType.TexEnv:
-					EditorGUILayout.HelpBox("Textures haven't animation parameters", MessageType.Warning);
+					EditorGUILayout.HelpBox("Textures don't have animation parameters", MessageType.Warning);
 					break;
 				case BitAnimator.RecordSlot.PropertyType.Vector3:
 					minValue.vector4Value = EditorGUILayout.Vector3Field ("Min value", minValue.vector4Value);

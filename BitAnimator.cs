@@ -67,7 +67,7 @@ namespace AudioVisualization
         {
             public enum PropertiesSet
             {
-                Material, ParticleSystem, BlendShape, Transform
+                Material, ParticleSystem, BlendShape, Transform, Attribute
             };
             //Extension for ShaderUtil.ShaderPropertyType
             public enum PropertyType
@@ -316,6 +316,7 @@ namespace AudioVisualization
             switch (set)
             {
                 case RecordSlot.PropertiesSet.Material:
+                case RecordSlot.PropertiesSet.Attribute:
                     return targetObject.GetComponent<Renderer>().GetType();
                 case RecordSlot.PropertiesSet.ParticleSystem:
                     return typeof(ParticleSystem);
@@ -503,7 +504,6 @@ namespace AudioVisualization
                     }
                     else
                         taskProgress += 0.5f / recordSlots.Count / animationProperties.Length;
-
                     curve.keys = keyframes;
                     clip.SetCurve(go_path, renderType, animationProperties[c], curve);
                 }
@@ -769,6 +769,7 @@ namespace AudioVisualization
                 AssetDatabase.Refresh();
             }
         }
+
         public ComputeShader computeShader;
         public RenderTexture computeShaderResult;
         public struct Task
