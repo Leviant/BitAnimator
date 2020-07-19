@@ -1,5 +1,33 @@
 # BitAnimator 
-Version: 1.0 preview (build 2019.07.16)
+Version: 1.0.2 preview (build 2020.07.18)
+
+
+Unity editor extension for music visualization and animation recording
+
+Changes in version 1.0:
+---
+* Testing animations in Play and Edit Mode
+* Parameter for property: Damping - creates a smooth fading animation
+* Parameter for property: Smoothness - completely smooths the animation making it less sharp
+* Parameter for property: Accumulate - the animation does not subside and constantly accumulates
+* Parameter for property: Lerp repeats - loop the animation when it reaches its maximum (useful with Accumulate)
+* Modifiers for property: TimeRange - limits the recording of the animation effect by time (has 4 values: start of rise, start, end, smooth end)
+* Added ability to compress animation file (Advanced settings / Animation quality)
+* Updated GUI for BitAnimator
+* Added the ability to switch the interface mode from simple to expert
+* GUI for Window / BitAnimator allows you to test frequencies and peaks in music in test mode
+* Calculations on the GPU (now animations can be rewritten up to 100 times faster)
+* Added new filters: Exp, Hann Poison, Dolph Chebyshev
+
+In development:
+---
+* GUI Window / BitAnimator
+* Demo scenes - usage examples and templates
+* Presets
+* Modifiers for property
+* Beat detector
+* Beat Per Minute Analysis (BPM)
+----
 
 расширение редактора Unity для визуализации музыки и записи в анимацию
 
