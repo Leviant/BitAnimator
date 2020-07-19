@@ -1462,7 +1462,7 @@ namespace AudioVisualization
             keys[2].value = 1;
             keys[3].time = fadeOut;
             keys[3].value = 0;
-            InitializeBuffer(ref keyframes, keys.Length, 20);
+            InitializeBuffer(ref keyframes, keys.Length, 32);
             keyframes.SetData(keys);
             computeShader.SetBuffer(CurveFilter.ID, cs_Output, input);
             computeShader.SetBuffer(CurveFilter.ID, cs_Keyframes, keyframes);

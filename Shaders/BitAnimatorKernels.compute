@@ -78,6 +78,8 @@ struct Keyframe
 	float inTangent;
 	float outTangent;
 	int tangentMode;
+	float unused0;
+	double unused1;
 };
 Buffer<float> Window;
 Buffer<float> Input;
@@ -1215,6 +1217,8 @@ void FillKeyframes(uint3 id : SV_DispatchThreadID)
 		k.inTangent = 0.0;
 		k.outTangent = 0.0;
 		k.tangentMode = 0;
+		k.unused0 = 0;
+		k.unused1 = 0;
 		OutputKeyframes[id.x] = k;
 	}
 }
@@ -1331,6 +1335,8 @@ void KeyframesCreator(uint3 id : SV_DispatchThreadID, uint localID : SV_GroupInd
 			result.inTangent = 0;
 			result.outTangent = 0;
 			result.tangentMode = 1; //Broken (inTangent != outTangent)
+			result.unused0 = 0;
+			result.unused1 = 0;
 			OutputKeyframes[id.x + channel * GridSize.x] = result;
 		}
 	}
@@ -1371,6 +1377,8 @@ void RemapGradientKernel(uint3 id : SV_DispatchThreadID, uint localID : SV_Group
 			result.inTangent = 0;
 			result.outTangent = 0;
 			result.tangentMode = 1; //Broken (inTangent != outTangent)
+			result.unused0 = 0;
+			result.unused1 = 0;
 			OutputKeyframes[id.x + channel * GridSize.x] = result;
 		}
 	}
